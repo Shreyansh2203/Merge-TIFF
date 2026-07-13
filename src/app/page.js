@@ -76,7 +76,19 @@ export default function Home() {
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = 'merged_document.tif';
+      
+      // Create a dynamic filename from the files
+      let outName = 'merged_document.tif';
+      if (files.length > 0) {
+        const basenames = files.map(f => f.name.replace(/\.[^/.]+$/, ""));
+        if (basenames.length <= 4) {
+          outName = basenames.join('_') + '_merged.tif';
+        } else {
+          outName = basenames.slice(0, 3).join('_') + `_and_${basenames.length - 3}_more_merged.tif`;
+        }
+      }
+      
+      a.download = outName;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
