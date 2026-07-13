@@ -1,13 +1,17 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
 :root {
-  --bg-color: #0f172a;
-  --text-color: #f8fafc;
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
-  --glass-bg: rgba(30, 41, 59, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --danger: #ef4444;
+  --bg-color: #f3f4f6;
+  --text-main: #111827;
+  --text-muted: #6b7280;
+  --card-bg: #ffffff;
+  --border-color: #e5e7eb;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --danger: #dc2626;
+  --dropzone-bg: #f8fafc;
+  --dropzone-border: #94a3b8;
+  --dropzone-active: #eff6ff;
 }
 
 * {
@@ -17,14 +21,9 @@
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background-color: var(--bg-color);
-  background-image: 
-    radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
-    radial-gradient(at 50% 0%, hsla(225,39%,30%,0.3) 0, transparent 50%), 
-    radial-gradient(at 100% 0%, hsla(339,49%,30%,0.3) 0, transparent 50%);
-  background-attachment: fixed;
-  color: var(--text-color);
+  color: var(--text-main);
   min-height: 100vh;
   display: flex;
   justify-content: center;
@@ -33,73 +32,69 @@ body {
 
 .container {
   width: 100%;
-  max-width: 600px;
+  max-width: 550px;
   padding: 2rem;
 }
 
 .glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--glass-border);
-  border-radius: 24px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   padding: 2.5rem;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
 
 h1 {
-  font-size: 2.5rem;
-  font-weight: 700;
-  text-align: center;
-  margin-bottom: 0.5rem;
-  background: linear-gradient(135deg, #60a5fa, #c084fc);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-size: 1.5rem;
+  font-weight: 600;
+  text-align: left;
+  margin-bottom: 0.25rem;
+  color: var(--text-main);
 }
 
 p.subtitle {
-  text-align: center;
-  color: #94a3b8;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 0.95rem;
   margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 1rem;
 }
 
 .dropzone {
-  border: 2px dashed var(--primary);
-  border-radius: 16px;
-  padding: 3rem 2rem;
+  border: 2px dashed var(--dropzone-border);
+  border-radius: 8px;
+  padding: 2.5rem 2rem;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s ease;
-  background: rgba(59, 130, 246, 0.05);
-  margin-bottom: 2rem;
+  transition: all 0.2s ease;
+  background: var(--dropzone-bg);
+  margin-bottom: 1.5rem;
 }
 
 .dropzone:hover, .dropzone.active {
-  background: rgba(59, 130, 246, 0.15);
-  border-color: #60a5fa;
-  transform: scale(1.02);
+  background: var(--dropzone-active);
+  border-color: var(--primary);
 }
 
 .dropzone-icon {
-  font-size: 3rem;
-  margin-bottom: 1rem;
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  color: var(--text-muted);
 }
 
 .dropzone-text {
+  font-size: 0.95rem;
   font-weight: 500;
-  color: #cbd5e1;
+  color: var(--text-main);
 }
 
 .file-list {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   max-height: 200px;
   overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
 }
 
 .file-item {
@@ -107,66 +102,62 @@ p.subtitle {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  margin-bottom: 0.5rem;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-color);
   font-size: 0.9rem;
-  animation: fadeIn 0.3s ease;
+  color: var(--text-main);
+}
+
+.file-item:last-child {
+  border-bottom: none;
 }
 
 .file-item button {
   background: none;
   border: none;
-  color: var(--danger);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 1.2rem;
-  transition: transform 0.2s;
+  line-height: 1;
 }
 
 .file-item button:hover {
-  transform: scale(1.2);
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  color: var(--danger);
 }
 
 .btn-primary {
   width: 100%;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
   border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border-radius: 6px;
+  background-color: var(--primary);
   color: white;
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: 1rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-  box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.39);
+  transition: background-color 0.2s;
 }
 
 .btn-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.23);
+  background-color: var(--primary-hover);
 }
 
 .btn-primary:disabled {
-  opacity: 0.7;
+  background-color: var(--border-color);
+  color: var(--text-muted);
   cursor: not-allowed;
-  transform: none;
 }
 
 /* Spinner */
 .spinner {
   display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 3px solid rgba(255,255,255,0.3);
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
   border-radius: 50%;
   border-top-color: white;
-  animation: spin 1s ease-in-out infinite;
-  margin-right: 10px;
+  animation: spin 1s linear infinite;
+  margin-right: 8px;
   vertical-align: middle;
 }
 
@@ -176,15 +167,15 @@ p.subtitle {
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05); 
+  background: #f1f1f1; 
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2); 
+  background: #c1c1c1; 
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3); 
+  background: #a8a8a8; 
 }
