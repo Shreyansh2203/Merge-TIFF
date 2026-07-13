@@ -1,65 +1,143 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useRef } from 'react';
 
 export default function Home() {
+  const [files, setFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      addFiles(Array.from(e.target.files));
+    }
+  };
+
+  const addFiles = (newFiles) => {
+    const tiffFiles = newFiles.filter(
+      file => file.name.toLowerCase().endsWith('.tif') || file.name.toLowerCase().endsWith('.tiff')
+    );
+    
+    setFiles(prev => {
+      const existingNames = new Set(prev.map(f => f.name));
+      const uniqueNewFiles = tiffFiles.filter(f => !existingNames.has(f.name));
+      return [...prev, ...uniqueNewFiles];
+    });
+  };
+
+  const removeFile = (indexToRemove) => {
+    setFiles(files.filter((_, index) => index !== indexToRemove));
+  };
+
+  const handleMerge = async () => {
+    if (files.length === 0) return;
+    
+    setIsMerging(true);
+    
+    try {
+      const formData = new FormData();
+      files.forEach(file => {
+        formData.append('files', file);
+      });
+
+      const response = await fetch('/api/merge', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to merge files');
+      }
+
+      // Create a download link for the blob
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = 'merged_document.tif';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      
+    } catch (error) {
+      alert(`Error: ${error.message}`);
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.js file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="container">
+      <div className="glass-panel">
+        <h1>TIFF Merger</h1>
+        <p className="subtitle">Combine multiple TIFF files effortlessly.</p>
+        
+        <div 
+          className={`dropzone ${isDragging ? 'active' : ''}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current.click()}
+        >
+          <div className="dropzone-icon">📄</div>
+          <div className="dropzone-text">
+            Drag & drop TIFF files here,<br/>or click to select
+          </div>
+          <input 
+            type="file" 
+            multiple 
+            accept=".tif,.tiff" 
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            style={{ display: 'none' }} 
+          />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        {files.length > 0 && (
+          <div className="file-list">
+            {files.map((file, index) => (
+              <div key={`${file.name}-${index}`} className="file-item">
+                <span>{file.name}</span>
+                <button onClick={() => removeFile(index)} title="Remove file">&times;</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button 
+          className="btn-primary" 
+          onClick={handleMerge} 
+          disabled={files.length === 0 || isMerging}
+        >
+          {isMerging ? (
+            <><span className="spinner"></span> Merging...</>
+          ) : (
+            'Merge TIFFs'
+          )}
+        </button>
+      </div>
+    </main>
   );
 }
