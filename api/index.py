@@ -5,6 +5,10 @@ import io
 
 app = Flask(__name__)
 
+@app.route('/health')
+def health():
+    return {"status": "ok"}
+
 @app.route('/api/merge', methods=['POST'])
 def merge_tiffs():
     if 'files' not in request.files:
@@ -71,4 +75,4 @@ def merge_tiffs():
     )
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5328)
+    app.run(port=5328)
