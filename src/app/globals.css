@@ -62,10 +62,14 @@ p.subtitle {
 }
 
 .dropzone {
+  display: block;
+  width: 100%;
   border: 2px dashed var(--dropzone-border);
   border-radius: 8px;
   padding: 2.5rem 2rem;
   text-align: center;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
   transition: all 0.2s ease;
   background: var(--dropzone-bg);
@@ -75,6 +79,32 @@ p.subtitle {
 .dropzone:hover, .dropzone.active {
   background: var(--dropzone-active);
   border-color: var(--primary);
+}
+
+.dropzone:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.file-input {
+  display: none;
+}
+
+.alert {
+  margin-bottom: 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background-color: #fef2f2;
+  color: #991b1b;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.alert-success {
+  border-color: #bbf7d0;
+  background-color: #f0fdf4;
+  color: #166534;
 }
 
 .dropzone-icon {
@@ -87,6 +117,13 @@ p.subtitle {
   font-size: 0.95rem;
   font-weight: 500;
   color: var(--text-main);
+}
+
+.file-list-summary {
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: left;
 }
 
 .file-list {
@@ -123,6 +160,12 @@ p.subtitle {
 
 .file-item button:hover {
   color: var(--danger);
+}
+
+.file-item button:focus-visible,
+.btn-primary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .btn-primary {

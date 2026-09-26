@@ -1,12 +1,51 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useRef, useState } from 'react';
+
+const MAX_STEM_LENGTH = 40;
+const MAX_OUTPUT_STEM_LENGTH = 120;
+const UNSAFE_FILENAME_CHARS = /[\u0000-\u001f\u007f/\\:*?"<>|]/g;
+
+function buildOutputName(names) {
+  const stems = names
+    .map((name) =>
+      name
+        .replace(UNSAFE_FILENAME_CHARS, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\.[^.]+$/, '')
+        .slice(0, MAX_STEM_LENGTH)
+        .trim()
+    )
+    .filter(Boolean);
+
+  if (stems.length === 0) {
+    return 'merged_document.tif';
+  }
+
+  const summary =
+    stems.length <= 4
+      ? stems.join('_')
+      : `${stems.slice(0, 3).join('_')}_and_${stems.length - 3}_more`;
+
+  return `${summary.slice(0, MAX_OUTPUT_STEM_LENGTH)}_merged.tif`;
+}
+
+function fileKey(file) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
 
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const fileInputRef = useRef(null);
+
+  const openPicker = () => {
+    fileInputRef.current?.click();
+  };
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -21,7 +60,7 @@ export default function Home() {
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       addFiles(Array.from(e.dataTransfer.files));
     }
@@ -31,32 +70,59 @@ export default function Home() {
     if (e.target.files && e.target.files.length > 0) {
       addFiles(Array.from(e.target.files));
     }
+    e.target.value = '';
   };
 
   const addFiles = (newFiles) => {
-    const tiffFiles = newFiles.filter(
-      file => file.name.toLowerCase().endsWith('.tif') || file.name.toLowerCase().endsWith('.tiff')
+    const tiffFiles = newFiles.filter((file) =>
+      /\.tiff?$/i.test(file.name)
     );
-    
-    setFiles(prev => {
-      const existingNames = new Set(prev.map(f => f.name));
-      const uniqueNewFiles = tiffFiles.filter(f => !existingNames.has(f.name));
-      return [...prev, ...uniqueNewFiles];
+
+    if (tiffFiles.length === 0) {
+      setError('Only .tif and .tiff files can be merged.');
+      return;
+    }
+
+    setError('');
+    setNotice('');
+
+    setFiles((prev) => {
+      const existing = new Set(prev.map(fileKey));
+      return [...prev, ...tiffFiles.filter((f) => !existing.has(fileKey(f)))];
     });
   };
 
   const removeFile = (indexToRemove) => {
-    setFiles(files.filter((_, index) => index !== indexToRemove));
+    setFiles((prev) => prev.filter((_, index) => index !== indexToRemove));
+    setError('');
+    setNotice('');
+  };
+
+  const readErrorMessage = async (response) => {
+    const body = await response.text();
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed.error === 'string' && parsed.error) {
+        return parsed.error;
+      }
+    } catch {
+      return 'The server returned an unexpected response.';
+    }
+    return `Request failed with status ${response.status}.`;
   };
 
   const handleMerge = async () => {
-    if (files.length === 0) return;
-    
+    if (files.length === 0) {
+      return;
+    }
+
     setIsMerging(true);
-    
+    setError('');
+    setNotice('');
+
     try {
       const formData = new FormData();
-      files.forEach(file => {
+      files.forEach((file) => {
         formData.append('files', file);
       });
 
@@ -66,35 +132,26 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to merge files');
+        throw new Error(await readErrorMessage(response));
       }
 
-      // Create a download link for the blob
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      
-      // Create a dynamic filename from the files
-      let outName = 'merged_document.tif';
-      if (files.length > 0) {
-        const basenames = files.map(f => f.name.replace(/\.[^/.]+$/, ""));
-        if (basenames.length <= 4) {
-          outName = basenames.join('_') + '_merged.tif';
-        } else {
-          outName = basenames.slice(0, 3).join('_') + `_and_${basenames.length - 3}_more_merged.tif`;
-        }
-      }
-      
-      a.download = outName;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      
-    } catch (error) {
-      alert(`Error: ${error.message}`);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = buildOutputName(files.map((file) => file.name));
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+
+      setNotice(`Merged ${files.length} file${files.length === 1 ? '' : 's'}.`);
+    } catch (mergeError) {
+      setError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : 'Failed to merge files.'
+      );
     } finally {
       setIsMerging(false);
     }
@@ -105,46 +162,82 @@ export default function Home() {
       <div className="glass-panel">
         <h1>TIFF Merger</h1>
         <p className="subtitle">Combine multiple TIFF files effortlessly.</p>
-        
-        <div 
+
+        {error && (
+          <p className="alert" role="alert">
+            {error}
+          </p>
+        )}
+        {notice && (
+          <p className="alert alert-success" role="status">
+            {notice}
+          </p>
+        )}
+
+        <button
+          type="button"
           className={`dropzone ${isDragging ? 'active' : ''}`}
+          onClick={openPicker}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          onClick={() => fileInputRef.current.click()}
+          aria-label="Add TIFF files. Drag and drop, or press Enter to browse."
         >
-          <div className="dropzone-icon">📄</div>
-          <div className="dropzone-text">
-            Drag & drop TIFF files here,<br/>or click to select
-          </div>
-          <input 
-            type="file" 
-            multiple 
-            accept=".tif,.tiff" 
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            style={{ display: 'none' }} 
-          />
-        </div>
+          <span className="dropzone-icon" aria-hidden="true">
+            &#128196;
+          </span>
+          <span className="dropzone-text">
+            Drag &amp; drop TIFF files here,
+            <br />
+            or click to select
+          </span>
+        </button>
+
+        <input
+          type="file"
+          multiple
+          accept=".tif,.tiff"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          className="file-input"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
 
         {files.length > 0 && (
-          <div className="file-list">
-            {files.map((file, index) => (
-              <div key={`${file.name}-${index}`} className="file-item">
-                <span>{file.name}</span>
-                <button onClick={() => removeFile(index)} title="Remove file">&times;</button>
-              </div>
-            ))}
-          </div>
+          <>
+            <p className="file-list-summary">
+              {files.length} file{files.length === 1 ? '' : 's'} selected
+            </p>
+            <div className="file-list">
+              {files.map((file, index) => (
+                <div key={`${fileKey(file)}-${index}`} className="file-item">
+                  <span>{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    title={`Remove ${file.name}`}
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
 
-        <button 
-          className="btn-primary" 
-          onClick={handleMerge} 
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleMerge}
           disabled={files.length === 0 || isMerging}
+          aria-busy={isMerging}
         >
           {isMerging ? (
-            <><span className="spinner"></span> Merging...</>
+            <>
+              <span className="spinner" aria-hidden="true" /> Merging...
+            </>
           ) : (
             'Merge TIFFs'
           )}
