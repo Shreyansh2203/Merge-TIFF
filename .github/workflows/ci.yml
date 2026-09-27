@@ -52,5 +52,7 @@ jobs:
         run: npm audit --audit-level=high
       - name: Lint
         run: npm run lint -- --max-warnings=0
+      - name: Run client unit tests
+        run: npm run test:ui
       - name: Build
         run: npm run build
