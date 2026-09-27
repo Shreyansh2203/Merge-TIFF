@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -13,6 +14,8 @@ from api.merge import (
     MAX_TOTAL_IMAGE_PIXELS,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _multipart(parts):
     builder = EnvironBuilder(
@@ -22,6 +25,24 @@ def _multipart(parts):
     )
     environ = builder.get_environ()
     return environ["wsgi.input"].getvalue(), environ["CONTENT_TYPE"]
+
+
+def test_client_fixture_uses_the_real_limits(client):
+    """The test client must run the real merge, not a stand-in.
+
+    tests/conftest.py builds ``mini_app`` by calling ``create_app`` and overwriting
+    the two handlers with closures over that same function's constants, so the tests
+    that matter here exercise the real route. Assert that rather than assume it: a
+    future edit that turned mini_app into a hand-rolled app would otherwise turn the
+    whole suite into a tautology.
+    """
+    rules = {
+        rule.rule: client.application.view_functions[rule.endpoint]
+        for rule in client.application.url_map.iter_rules()
+    }
+
+    assert rules["/api/merge"] is merge_module.merge_tiffs
+    assert rules["/health"] is merge_module.health
 
 
 def test_health_reports_limits(client):
@@ -43,6 +64,50 @@ def test_resource_bounds_match_documented_values():
     assert MAX_FILES == 20
     assert MAX_IMAGE_PIXELS == 50_000_000
     assert MAX_TOTAL_IMAGE_PIXELS == 50_000_000
+
+
+def test_documented_limits_are_actually_published():
+    """The numbers above are compared to literals, not to the documentation.
+
+    Nothing else in the suite reads README.md, so a drift between the published
+    limits and the enforced ones is invisible to CI. This closes the obvious half:
+    every limit the README's API table quotes.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert '"max_files": 20' in readme, "README no longer states max_files=20"
+    assert "20 pages" in readme, "README no longer states the 20-page cap"
+    assert "50M decoded pixels" in readme, "README no longer states the pixel budget"
+    for size in ("4 MB in", "4 MB out"):
+        assert size in readme, f"README no longer states {size!r}"
+
+
+def test_a_multipage_upload_contributes_exactly_one_page(client, pages):
+    """A 3-frame TIFF is one page of the output, not three.
+
+    Documented in the README as "its frames are not expanded, so a 50-frame scan
+    becomes one page". Nothing asserted it: every n_frames assertion in the suite was
+    about the output of freshly created single-frame images, so making merge_images
+    expand every frame left all 58 tests green.
+    """
+    buffer = io.BytesIO()
+    Image.new("L", (16, 16), 42).save(
+        buffer,
+        format="TIFF",
+        save_all=True,
+        append_images=[Image.new("L", (16, 16), 7), Image.new("L", (16, 16), 9)],
+    )
+    source = buffer.getvalue()
+    assert getattr(Image.open(io.BytesIO(source)), "n_frames", 1) == 3
+
+    response = client.post(
+        "/api/merge",
+        data={"files": [(io.BytesIO(source), "stack.tif")]},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert len(pages(response.data)) == 1, "the frames of a multi-page upload were expanded"
 
 
 def test_merge_multiple_images_into_multipage_tiff(
@@ -329,6 +394,49 @@ def test_response_ceiling_is_enforced_with_guidance(
     error = response.get_json()["error"]
     assert "2 KB" in error
     assert "split" in error
+
+
+def test_a_wrong_extension_is_rejected_by_the_extension_gate(client, tiff_bytes):
+    """The advice a user gets for a .png must come from the suffix allowlist.
+
+    Two gates could reject a renamed file: TIFF_SUFFIXES and the `image.format` check
+    in _decode_upload. Asserting only that the filename appears in the message let the
+    suffix gate be deleted without a single test noticing, and the user then gets
+    "'photo.png' is not a TIFF image." instead of the documented "... is not a TIFF
+    file. Only .tif and .tiff are accepted."
+    """
+    png = io.BytesIO()
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(png, format="PNG")
+
+    response = client.post(
+        "/api/merge",
+        data={
+            "files": [
+                (io.BytesIO(tiff_bytes()), "real.tif"),
+                (io.BytesIO(png.getvalue()), "photo.png"),
+            ]
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "Only .tif and .tiff are accepted" in error, (
+        "the extension guidance is gone, so the format gate is doing the suffix gate's job"
+    )
+
+
+def test_pillows_own_bomb_limit_is_kept_as_a_backstop():
+    """The header check in _decode_upload is ours; this one belongs to Pillow.
+
+    api/merge.py sets Image.MAX_IMAGE_PIXELS at import so Pillow's own two-times
+    DecompressionBombError still fires behind our own guard. The bomb tests below
+    monkeypatch Image.MAX_IMAGE_PIXELS to 128 before the request, so they can only
+    ever prove our check works -- deleting the module-level assignment left the whole
+    suite green.
+    """
+    assert Image.MAX_IMAGE_PIXELS == MAX_IMAGE_PIXELS
+    assert merge_module.MAX_IMAGE_PIXELS == 50_000_000
 
 
 def test_rejects_decompression_bomb(
