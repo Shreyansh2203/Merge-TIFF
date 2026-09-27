@@ -4,7 +4,12 @@ import pytest
 from PIL import Image
 
 from api import merge as merge_module
-from api.merge import MAX_FILES, MAX_IMAGE_PIXELS, MAX_REQUEST_BYTES
+from api.merge import (
+    MAX_FILES,
+    MAX_IMAGE_PIXELS,
+    MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES,
+)
 
 
 def test_health_reports_limits(client):
@@ -14,6 +19,7 @@ def test_health_reports_limits(client):
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["max_request_bytes"] == MAX_REQUEST_BYTES
+    assert payload["max_response_bytes"] == MAX_RESPONSE_BYTES
     assert payload["max_files"] == MAX_FILES
     assert payload["max_image_pixels"] == MAX_IMAGE_PIXELS
 
@@ -293,6 +299,25 @@ def test_rejects_oversized_request(client, tiff_bytes):
 
     assert response.status_code == 413
     assert "too large" in response.get_json()["error"].lower()
+
+
+def test_response_ceiling_is_enforced_with_guidance(
+    client, make_tiff, monkeypatch
+):
+    path = make_tiff(name="page.tif", size=(64, 64))
+    monkeypatch.setattr(merge_module, "MAX_RESPONSE_BYTES", 2 * 1024)
+    monkeypatch.setattr(merge_module, "OUTPUT_COMPRESSION", "raw")
+
+    response = client.post(
+        "/api/merge",
+        data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    error = response.get_json()["error"]
+    assert "2 KB" in error
+    assert "split" in error
 
 
 def test_rejects_decompression_bomb(

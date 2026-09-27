@@ -3,7 +3,13 @@ import io
 import pytest
 from PIL import Image
 
-from api.merge import OUTPUT_COMPRESSION, MergeError, merge_images
+from api import merge as merge_module
+from api.merge import (
+    MAX_RESPONSE_BYTES,
+    OUTPUT_COMPRESSION,
+    MergeError,
+    merge_images,
+)
 
 TIFF_COMPRESSION = {"tiff_adobe_deflate": 8, "raw": 1}
 
@@ -160,3 +166,28 @@ def test_unencodable_page_raises_merge_error():
 
     assert excinfo.value.status == 400
     assert "could not be encoded" in excinfo.value.message
+
+
+def test_response_ceiling_is_below_the_platform_cap():
+    assert MAX_RESPONSE_BYTES == 4 * 1024 * 1024
+    assert MAX_RESPONSE_BYTES < 4_500_000
+
+
+def test_oversized_merge_is_rejected_before_it_is_returned(monkeypatch):
+    monkeypatch.setattr(merge_module, "OUTPUT_COMPRESSION", "raw")
+    pages = [_page(f"page{n}.tif", size=(1200, 1200)) for n in range(3)]
+
+    with pytest.raises(MergeError) as excinfo:
+        merge_images(pages)
+
+    assert excinfo.value.status == 413
+    assert "4.0 MB" in excinfo.value.message
+    assert "fewer pages per request" in excinfo.value.message
+
+
+def test_merge_at_the_response_ceiling_is_accepted(monkeypatch):
+    monkeypatch.setattr(merge_module, "MAX_RESPONSE_BYTES", 8 * 1024 * 1024)
+
+    data = merge_images([_page("small.tif", size=(32, 32))])
+
+    assert _open(data).n_frames == 1

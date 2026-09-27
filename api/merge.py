@@ -13,6 +13,13 @@ logging.basicConfig(
 logger = logging.getLogger("tiff_merge")
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
+# Vercel caps a function's request *and* response body at 4.5 MB and answers
+# anything larger with 413 FUNCTION_PAYLOAD_TOO_LARGE. The request cap above
+# sits under that ceiling so an oversized upload is rejected with a JSON
+# message; this one is the same idea for the way out, because a merge can
+# re-encode to a larger body than it received and would otherwise fail at the
+# edge with no in-app signal.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_FILES = 20
 MAX_IMAGE_PIXELS = 50_000_000
 TIFF_SUFFIXES = (".tif", ".tiff")
@@ -32,6 +39,12 @@ class MergeError(Exception):
         super().__init__(message)
         self.message = message
         self.status = status
+
+
+def _format_size(num_bytes):
+    if num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    return f"{num_bytes / 1024:.0f} KB"
 
 
 def _mode_conflict(pages):
@@ -76,7 +89,19 @@ def merge_images(pages):
             "Try re-saving them in a common colour mode and compression."
         ) from exc
 
-    return buffer.getvalue()
+    payload = buffer.getvalue()
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise MergeError(
+            f"Merging these files would produce {_format_size(len(payload))}, "
+            f"over the {_format_size(MAX_RESPONSE_BYTES)} this service can "
+            "return in one response. Merge fewer pages per request, or split "
+            "the batch into several smaller merges. Pages are already written "
+            "as lossless Deflate, so re-compressing the source files will not "
+            "bring the result under the limit.",
+            status=413,
+        )
+
+    return payload
 
 
 def _decode_upload(storage):
@@ -120,6 +145,7 @@ def health():
     return jsonify(
         status="ok",
         max_request_bytes=MAX_REQUEST_BYTES,
+        max_response_bytes=MAX_RESPONSE_BYTES,
         max_files=MAX_FILES,
         max_image_pixels=MAX_IMAGE_PIXELS,
     )
@@ -160,9 +186,11 @@ def merge_tiffs():
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_too_large(_exc):
-    limit_mb = MAX_REQUEST_BYTES // (1024 * 1024)
     return jsonify(
-        error=f"Upload is too large. The maximum request size is {limit_mb} MB."
+        error=(
+            "Upload is too large. The maximum request size is "
+            f"{_format_size(MAX_REQUEST_BYTES)}."
+        )
     ), 413
 
 

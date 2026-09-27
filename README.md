@@ -78,7 +78,7 @@ That serves the API on <http://127.0.0.1:5328>:
 
 ```bash
 curl http://127.0.0.1:5328/health
-# {"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"status":"ok"}
+# {"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"max_response_bytes":4194304,"status":"ok"}
 ```
 
 ### 2. The Next.js frontend
@@ -129,7 +129,7 @@ The pytest suite generates its fixtures in `tmp_path` with Pillow, so no binary 
 |---|---|
 | `200` | Merged TIFF returned as `image/tiff`, `Content-Disposition: attachment` |
 | `400` | No `files` field, no files selected, non-TIFF extension, unreadable or corrupt TIFF, unsupported page-mode combination, or more than 20 files |
-| `413` | Request body exceeds 4 MB |
+| `413` | Request body exceeds 4 MB, or the merged TIFF would exceed the 4 MB response ceiling |
 | `500` | Unexpected server fault (detail logged, never returned) |
 
 All error responses are JSON: `{ "error": "<human-readable reason>" }`.
@@ -149,6 +149,7 @@ curl -X POST http://127.0.0.1:5328/api/merge \
 {
   "status": "ok",
   "max_request_bytes": 4194304,
+  "max_response_bytes": 4194304,
   "max_files": 20,
   "max_image_pixels": 50000000
 }
@@ -162,15 +163,16 @@ curl -X POST http://127.0.0.1:5328/api/merge \
 |---|---|---|
 | Request body (this app) | 4 MB | `app.config["MAX_CONTENT_LENGTH"]`; returns `413` with a JSON error |
 | Request body (Vercel) | 4.5 MB | Hard platform cap; over it the edge returns `413 FUNCTION_PAYLOAD_TOO_LARGE` |
-| Response body (Vercel) | 4.5 MB | Same hard cap on the way out; over it the edge returns `500 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE` |
+| Response body (this app) | 4 MB | `MAX_RESPONSE_BYTES`, held under the platform cap so an oversized merge fails here with a reason |
+| Response body (Vercel) | 4.5 MB | Same hard cap on the way out; over it the edge returns `413 FUNCTION_PAYLOAD_TOO_LARGE` |
 | Files per request (this app) | 20 | Bounds decode work per invocation |
 | Decoded pixels per image (this app) | 50,000,000 | `Image.MAX_IMAGE_PIXELS`; error is raised past 2x this |
 | Output compression | `tiff_adobe_deflate` | Lossless, and uniform because Pillow threads one `encoderinfo` per save |
 
 Things worth knowing:
 
-- **Vercel caps both directions at 4.5 MB, and this app's own request cap is lower at 4 MB.** The 4 MB application limit is deliberately set below the platform's 4.5 MB so that an oversized upload is rejected by this app with a clear JSON message, rather than being cut off at the edge with an opaque platform error.
-- **The 4.5 MB response cap is the practical ceiling on a merge.** The merged TIFF is returned as a single in-memory body, not streamed, so a merge whose output exceeds 4.5 MB fails at the edge with a `500` even though the request was accepted and the merge itself succeeded. Fewer, smaller, or better-compressing pages raise this ceiling. This is a platform limit, not a bug in the app; removing it would require client-direct upload to Vercel Blob.
+- **Vercel caps both directions at 4.5 MB, and this app's own caps sit below that at 4 MB.** The 4 MB application limits are deliberately set under the platform's 4.5 MB so that an oversized request *or* response is refused by this app with a clear JSON message, rather than being cut off at the edge with an opaque platform error.
+- **A merge that would return more than 4 MB is refused here, with a `413` that says what to do.** The merged TIFF is assembled in memory and re-encoded, and re-encoding is not guaranteed to shrink: pages that arrive heavily compressed (JPEG-in-TIFF, LZW at a high ratio) can come back out larger than they went in. So the size of the finished body is measured before it is sent, and a merge above `MAX_RESPONSE_BYTES` returns the offending size, the limit, and the two remedies that work: **merge fewer pages per request**, or **split the batch into several smaller merges**. Re-compressing the source files does not help — every page is already written as lossless Deflate. The UI shows this message inline, the same as any other error. Lifting the ceiling altogether is not a config change: the platform's 4.5 MB response limit would still apply, and the way past it is client-direct upload to Vercel Blob.
 - **Output compression is uniform across every page.** Pillow threads a single `encoderinfo` per save, so the one `compression=` value passed to every `image.save()` on the shared `AppendingTiffWriter` applies to all pages. Per-page compression therefore cannot be preserved, and every page is written as Adobe Deflate.
 - **Mixed modes and sizes are supported.** Differing colour modes, bit depths, and page sizes round-trip correctly, because each page is written with its own minimal tag set rather than inheriting the first page's tags. The one unsupported combination is bilevel (`1`) together with palette (`P`/`PA`), which returns `400` with instructions.
 - **One page per uploaded file.** A multi-page TIFF that you upload is contributed as a single page — its frames are not expanded, so a 50-frame scan becomes one page of the output. Upload the frames as separate files to get 50 pages.
@@ -226,7 +228,7 @@ Run all three against the deployed URL. All three must behave as listed.
 | Check | Expected |
 |---|---|
 | `GET /` | `200`, styled page containing the heading `TIFF Merger`. A bare unstyled 404 means the framework preset is wrong. |
-| `GET /health` | `200` with `content-type: application/json` and body `{"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"status":"ok"}` |
+| `GET /health` | `200` with `content-type: application/json` and body `{"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"max_response_bytes":4194304,"status":"ok"}` |
 | `POST /api/merge` with two `.tif` parts | `200` with `content-type: image/tiff` and `content-disposition` naming `merged_output.tif`; the body opens as a 2-page TIFF |
 
 ```bash
@@ -244,7 +246,7 @@ curl -sS -X POST https://<your-domain>/api/merge \
 
 - **The framework preset is pinned in `vercel.json` and guarded by tests**, so the failure mode that would take the whole site down is now closed in the repository. The dashboard check and the smoke test still need a human once per new Vercel project, as described in [First deploy](#first-deploy-what-a-repository-cannot-check).
 - **There is no authentication or rate limiting on `/api/merge`.** It is intentionally public and unauthenticated: adding auth would require a committed secret or edge-level work that was left out of scope. The resource bounds (4 MB, 20 files, 50M pixels) are the only protection, and they bound per-request cost rather than request rate.
-- **A merge whose output exceeds 4.5 MB cannot be served from this architecture.** The 4.5 MB response cap is enforced by Vercel below the application. Lifting it means client-direct upload to Vercel Blob, which is a redesign rather than a config change.
+- **A merge whose output would exceed 4 MB is refused by this app, not the platform.** See [Limits and Behaviour](#limits-and-behaviour): the request is rejected with a `413` that names the size and the limit. The platform's own 4.5 MB response cap is still the hard ceiling; the only way past it is client-direct upload to Vercel Blob, which is a redesign rather than a config change.
 - **There is no Python dependency audit in CI.** Node advisories are gated by `npm audit --audit-level=high`; the Python side has no equivalent, so a Pillow or Werkzeug advisory would only be found by remembering to check. Adding `pip-audit` as a CI step is the obvious follow-up.
 
 ---
