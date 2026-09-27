@@ -105,10 +105,15 @@ async rewrites() {
 ## Quality Gates
 
 ```bash
-npm run lint      # ESLint via eslint-config-next
-npm run build     # next build
-python -m pytest  # Flask + Pillow merge tests
+npm run lint                        # ESLint via eslint-config-next
+npm run build                       # next build
+python -m pytest                    # Flask + Pillow merge tests
 ```
+
+CI runs the same three on every push to `main` and every pull request, plus two extra gates:
+
+- `npm audit --audit-level=high` — fails on a new high or critical advisory.
+- `npm run lint -- --max-warnings=0` — lint *warnings* fail the build, not just errors. Locally `npm run lint` stays permissive; pass `-- --max-warnings=0` yourself to reproduce CI.
 
 The pytest suite generates its fixtures in `tmp_path` with Pillow, so no binary test assets are committed.
 
@@ -155,17 +160,20 @@ curl -X POST http://127.0.0.1:5328/api/merge \
 
 | Limit | Value | Rationale |
 |---|---|---|
-| Request body | 4 MB | Vercel Functions reject payloads over 4.5 MB with `FUNCTION_PAYLOAD_TOO_LARGE` |
-| Files per request | 20 | Bounds decode work per invocation |
-| Decoded pixels per image | 50,000,000 | `Image.MAX_IMAGE_PIXELS`; error is raised past 2x this |
-| Output compression | `tiff_adobe_deflate` | Lossless, and pinned because Pillow applies one `encoderinfo` to every page |
+| Request body (this app) | 4 MB | `app.config["MAX_CONTENT_LENGTH"]`; returns `413` with a JSON error |
+| Request body (Vercel) | 4.5 MB | Hard platform cap; over it the edge returns `413 FUNCTION_PAYLOAD_TOO_LARGE` |
+| Response body (Vercel) | 4.5 MB | Same hard cap on the way out; over it the edge returns `500 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE` |
+| Files per request (this app) | 20 | Bounds decode work per invocation |
+| Decoded pixels per image (this app) | 50,000,000 | `Image.MAX_IMAGE_PIXELS`; error is raised past 2x this |
+| Output compression | `tiff_adobe_deflate` | Lossless, and uniform because Pillow threads one `encoderinfo` per save |
 
 Things worth knowing:
 
-- **The response is capped at 4.5 MB by the platform.** Merging enough pages to exceed that will fail at the edge even though the request was accepted. This is the practical ceiling on a Vercel deployment.
-- **Output compression is uniform.** Pillow shares one `encoderinfo` across all pages of a multi-page save, so per-page compression cannot be preserved. Deflate is used for every page.
+- **Vercel caps both directions at 4.5 MB, and this app's own request cap is lower at 4 MB.** The 4 MB application limit is deliberately set below the platform's 4.5 MB so that an oversized upload is rejected by this app with a clear JSON message, rather than being cut off at the edge with an opaque platform error.
+- **The 4.5 MB response cap is the practical ceiling on a merge.** The merged TIFF is returned as a single in-memory body, not streamed, so a merge whose output exceeds 4.5 MB fails at the edge with a `500` even though the request was accepted and the merge itself succeeded. Fewer, smaller, or better-compressing pages raise this ceiling. This is a platform limit, not a bug in the app; removing it would require client-direct upload to Vercel Blob.
+- **Output compression is uniform across every page.** Pillow threads a single `encoderinfo` per save, so the one `compression=` value passed to every `image.save()` on the shared `AppendingTiffWriter` applies to all pages. Per-page compression therefore cannot be preserved, and every page is written as Adobe Deflate.
 - **Mixed modes and sizes are supported.** Differing colour modes, bit depths, and page sizes round-trip correctly, because each page is written with its own minimal tag set rather than inheriting the first page's tags. The one unsupported combination is bilevel (`1`) together with palette (`P`/`PA`), which returns `400` with instructions.
-- **One page per uploaded file.** A multi-page TIFF that you upload is contributed as a single page; its frames are not expanded.
+- **One page per uploaded file.** A multi-page TIFF that you upload is contributed as a single page — its frames are not expanded, so a 50-frame scan becomes one page of the output. Upload the frames as separate files to get 50 pages.
 - **Untrusted input.** Files are decoded in memory and never written to disk.
 
 ---
@@ -178,7 +186,71 @@ Things worth knowing:
 4. `vercel.json` routes `/api/(.*)` and `/health` to that function. Vercel rewrites change which function handles a request, not the path the function observes, so Flask's own `/api/merge` and `/health` routes match.
 5. The `if __name__ == "__main__"` block in `api/index.py` is dead on Vercel — the module is imported, not run as a script — and exists only for local development.
 
-**Verify once after the first deploy.** Vercel can also detect a Python *framework* preset from `requirements.txt`. If the Flask preset were ever selected it would claim every request and the Next.js site would stop serving. If the deployed site returns Flask's 404 instead of the app, set **Framework Preset → Next.js** in Project Settings and redeploy. See [Open items](#open-items--recommendations).
+### Required first-deploy check: the framework preset
+
+**This is the one failure mode that can take the entire site down, and it cannot be detected from the repository. It must be confirmed against a real deployment.**
+
+#### Why the risk is concrete
+
+This repository satisfies both conditions of Vercel's Python *framework* preset detection:
+
+- `requirements.txt` names a framework Vercel recognises — `Flask==3.0.3`.
+- `api/index.py` exposes a top-level variable named `app` that is a Flask instance. `index.py` is one of the exact entrypoint filenames Vercel searches, and `api/` is one of the directories it searches them in.
+
+Vercel's own documentation states that [a Python framework preset takes precedence over file-based functions](https://vercel.com/docs/functions/runtimes/python/api-directory#framework-preset-precedence): when a preset is detected, the framework application handles **all** requests and the files under `/api` stop becoming separate Functions. This project is a Next.js site that depends on that file-based function, so a Flask preset selection breaks the site outright.
+
+#### The exact check to perform
+
+Immediately after the first deploy completes:
+
+1. Open the project at <https://vercel.com/dashboard> → **Merge-TIFF** → **Settings** → **Build & Deployment**.
+2. Read the **Framework Preset** field.
+3. **It must read `Next.js`.** If it reads `Flask`, the deployment is broken — apply the remedy below before doing anything else.
+
+#### The exact symptom to look for
+
+If the Flask preset was selected, Flask receives every request including `/`. No Flask route matches `/`, so the browser renders Flask's built-in error page: a bare, unstyled `404 Not Found` on an empty white page — no dropzone, no styles, no page content.
+
+Two things make this easy to misdiagnose:
+
+- **The deployment reports success.** There is no failed build, no error banner, and nothing in the deploy logs points at the cause.
+- **`/health` and `/api/merge` may still respond**, because Flask *does* serve those two paths. If you only test the API, the site looks healthy while the actual user-facing page is a 404. Always check `GET /` first.
+
+A correct deployment shows the styled dropzone page with the heading **TIFF Merger**.
+
+#### The exact remedy
+
+1. **Settings** → **Build & Deployment** → **Framework Preset** → select **Next.js**.
+2. **Redeploy.** Changing the preset does not rebuild already-built output, so the fix does not take effect until a new build runs. Use **Deployments** → the most recent deployment → **⋯** → **Redeploy**, or push an empty commit.
+3. Re-run the smoke test below, starting with `GET /`.
+
+#### Smoke test
+
+Run all three against the deployed URL. All three must behave as listed.
+
+| Check | Expected |
+|---|---|
+| `GET /` | `200`, styled page containing the heading `TIFF Merger`. A bare unstyled 404 means the framework preset is wrong — see the remedy above. |
+| `GET /health` | `200` with `content-type: application/json` and body `{"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"status":"ok"}` |
+| `POST /api/merge` with two `.tif` parts | `200` with `content-type: image/tiff` and `content-disposition` naming `merged_output.tif`; the body opens as a 2-page TIFF |
+
+```bash
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://<your-domain>/
+curl -sS https://<your-domain>/health
+curl -sS -X POST https://<your-domain>/api/merge \
+  -F "files=@page1.tif" \
+  -F "files=@page2.tif" \
+  -o merged.tif
+```
+
+---
+
+## Open items and recommendations
+
+- **The framework preset is the one unverifiable-from-CI risk.** Nothing in this repository or its CI can detect a wrong preset; it needs one manual check per new Vercel project, as described in [Required first-deploy check](#required-first-deploy-check-the-framework-preset). If the project is ever recreated on Vercel, repeat the check — it is not a one-time event.
+- **There is no authentication or rate limiting on `/api/merge`.** It is intentionally public and unauthenticated: adding auth would require a committed secret or edge-level work that was left out of scope. The resource bounds (4 MB, 20 files, 50M pixels) are the only protection, and they bound per-request cost rather than request rate.
+- **A merge whose output exceeds 4.5 MB cannot be served from this architecture.** The 4.5 MB response cap is enforced by Vercel below the application. Lifting it means client-direct upload to Vercel Blob, which is a redesign rather than a config change.
+- **There is no Python dependency audit in CI.** Node advisories are gated by `npm audit --audit-level=high`; the Python side has no equivalent, so a Pillow or Werkzeug advisory would only be found by remembering to check. Adding `pip-audit` as a CI step is the obvious follow-up.
 
 ---
 
