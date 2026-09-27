@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Next.js: 16](https://img.shields.io/badge/Next.js-16-black.svg)](package.json)
 [![React: 19](https://img.shields.io/badge/React-19-61dafb.svg)](package.json)
-[![Python: 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](api/index.py)
+[![Python: 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](api/merge.py)
 
 A web tool that merges multiple TIFF images into a single multi-page TIFF, in the browser. The page never sees your files: the browser uploads them to a serverless function that reassembles them with Pillow and streams one `.tif` back.
 
@@ -24,7 +24,7 @@ Merge-TIFF does the one thing you need, in a browser tab, with no install and no
 flowchart TD
     User([Browser]) -->|drag &amp; drop / picker| UI["Next.js 16 client component\nsrc/app/page.js"]
     UI -->|multipart POST /api/merge| Proxy["Vercel rewrite\nvercel.json"]
-    Proxy --> Fn["Python function\napi/index.py"]
+    Proxy --> Fn["Python function\napi/merge.py"]
     Fn --> Flask[Flask app: /api/merge, /health]
     Flask --> Guard{Limits}
     Guard -->|bytes, file count, pixels| Reject["413 / 400"]
@@ -35,9 +35,9 @@ flowchart TD
 Two tiers, joined by one rewrite:
 
 - **Tier 1 — Next.js 16 (App Router).** Renders the dropzone, owns file selection and client-side error state, and downloads the result as a blob. It is a static page; it holds no image data.
-- **Tier 2 — Python function.** `api/index.py` is a Flask WSGI app. It enforces the upload limits, decodes with Pillow, and writes the multi-page TIFF.
+- **Tier 2 — Python function.** `api/merge.py` is a Flask WSGI app. It enforces the upload limits, decodes with Pillow, and writes the multi-page TIFF.
 
-The browser calls `/api/merge`, which `vercel.json` routes to the Python function. The rewrite selects the function; it does not rewrite the path the function sees, so Flask still matches on `/api/merge`. See [Deployment](#deployment-on-vercel).
+The browser calls `/api/merge`, which is the route Vercel serves the file-based function at, and which `vercel.json` pins explicitly. See [Deployment](#deployment-on-vercel).
 
 ---
 
@@ -71,7 +71,7 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
-python api/index.py
+python api/merge.py
 ```
 
 That serves the API on <http://127.0.0.1:5328>:
@@ -180,49 +180,44 @@ Things worth knowing:
 
 ## Deployment on Vercel
 
-1. Import the repository at [vercel.com/new](https://vercel.com/new). Keep the framework preset on **Next.js**.
-2. `requirements.txt` is read automatically and Flask, Pillow, and Werkzeug are installed into the Python function.
-3. `api/index.py` is treated as a file-based Python function. Vercel serves it at its file path and loads the module-level `app` variable, which is this project's WSGI callable.
-4. `vercel.json` routes `/api/(.*)` and `/health` to that function. Vercel rewrites change which function handles a request, not the path the function observes, so Flask's own `/api/merge` and `/health` routes match.
-5. The `if __name__ == "__main__"` block in `api/index.py` is dead on Vercel — the module is imported, not run as a script — and exists only for local development.
+`vercel.json` decides how both tiers are built and routed. Nothing below is left to Vercel's framework inference:
 
-### Required first-deploy check: the framework preset
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "functions": {
+    "api/merge.py": {
+      "maxDuration": 30,
+      "excludeFiles": "{tests/**,.pytest_cache/**,.venv/**,venv/**,**/__pycache__/**,*.pyc}"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/merge" },
+    { "source": "/health", "destination": "/api/merge" }
+  ]
+}
+```
 
-**This is the one failure mode that can take the entire site down, and it cannot be detected from the repository. It must be confirmed against a real deployment.**
+- **`framework: "nextjs"` pins the Framework Preset** instead of letting Vercel infer one. Vercel infers a Python framework from a matching dependency in `requirements.txt`, and [a Python framework preset takes precedence over file-based functions](https://vercel.com/docs/functions/runtimes/python/api-directory#framework-preset-precedence): the framework app then answers *all* requests, including `/`, and the files under `api/` stop becoming separate Functions. The `Flask` dependency cannot be removed — the function *is* a Flask app — so the preset is pinned rather than inferred.
+- **`api/merge.py` is the file-based Python function.** Vercel serves each file in `api/` at its file path, so this one is served at `/api/merge`: the exact URL the browser already calls. The file is deliberately **not** named one of Vercel's framework entrypoints (`app.py`, `index.py`, `server.py`, `main.py`, `wsgi.py`, `asgi.py`), because a Flask `app` at one of those names is the signature the Flask preset searches for. No such file exists at the project root or in `src/`, `app/`, or `api/`, so that signature cannot be completed even if the pin above were removed.
+- **`app` is the WSGI callable** Vercel loads from the file. Flask's own routes are `/api/merge` and `/health`.
+- **The rewrites select which route handles a request without changing the path the function observes** — Vercel has a separate, explicit `transforms` option for rewrites that *should* change it — so `/health` still matches Flask's `/health` route instead of arriving as `/api/merge`.
+- `requirements.txt` is read automatically, and Flask, Pillow, and Werkzeug are installed into the Python function.
+- The `if __name__ == "__main__"` block in `api/merge.py` never runs on Vercel — the module is imported as a function handler, not executed as a script — and exists only for local development.
 
-#### Why the risk is concrete
+`tests/test_deploy_config.py` asserts all of the above statically, so dropping the preset pin, renaming the function back to an entrypoint name, pointing a rewrite at a function that does not exist, or breaking the WSGI callable fails CI instead of a deployment.
 
-This repository satisfies both conditions of Vercel's Python *framework* preset detection:
+### First deploy: what a repository cannot check
 
-- `requirements.txt` names a framework Vercel recognises — `Flask==3.0.3`.
-- `api/index.py` exposes a top-level variable named `app` that is a Flask instance. `index.py` is one of the exact entrypoint filenames Vercel searches, and `api/` is one of the directories it searches them in.
+Everything above is enforced by CI, but two things can only be confirmed against a real deployment:
 
-Vercel's own documentation states that [a Python framework preset takes precedence over file-based functions](https://vercel.com/docs/functions/runtimes/python/api-directory#framework-preset-precedence): when a preset is detected, the framework application handles **all** requests and the files under `/api` stop becoming separate Functions. This project is a Next.js site that depends on that file-based function, so a Flask preset selection breaks the site outright.
+1. **The Framework Preset in the dashboard.** `vercel.json` overrides the preset for each deployment, but the stored project setting is server-side: open <https://vercel.com/dashboard> → **Merge-TIFF** → **Settings** → **Build & Deployment** and confirm **Framework Preset** reads **Next.js**. If it reads `Flask`, select **Next.js** and redeploy — the `vercel.json` pin should already have prevented it, and this check is what proves that it did.
+2. **The three smoke tests below**, which confirm the function was built, that it is reachable at `/api/merge`, and that the page being served is the Next.js one.
 
-#### The exact check to perform
+#### The symptom a wrong preset would still produce
 
-Immediately after the first deploy completes:
-
-1. Open the project at <https://vercel.com/dashboard> → **Merge-TIFF** → **Settings** → **Build & Deployment**.
-2. Read the **Framework Preset** field.
-3. **It must read `Next.js`.** If it reads `Flask`, the deployment is broken — apply the remedy below before doing anything else.
-
-#### The exact symptom to look for
-
-If the Flask preset was selected, Flask receives every request including `/`. No Flask route matches `/`, so the browser renders Flask's built-in error page: a bare, unstyled `404 Not Found` on an empty white page — no dropzone, no styles, no page content.
-
-Two things make this easy to misdiagnose:
-
-- **The deployment reports success.** There is no failed build, no error banner, and nothing in the deploy logs points at the cause.
-- **`/health` and `/api/merge` may still respond**, because Flask *does* serve those two paths. If you only test the API, the site looks healthy while the actual user-facing page is a 404. Always check `GET /` first.
-
-A correct deployment shows the styled dropzone page with the heading **TIFF Merger**.
-
-#### The exact remedy
-
-1. **Settings** → **Build & Deployment** → **Framework Preset** → select **Next.js**.
-2. **Redeploy.** Changing the preset does not rebuild already-built output, so the fix does not take effect until a new build runs. Use **Deployments** → the most recent deployment → **⋯** → **Redeploy**, or push an empty commit.
-3. Re-run the smoke test below, starting with `GET /`.
+If a Flask preset were ever selected, Flask receives every request including `/`. No Flask route matches `/`, so the browser renders Flask's built-in error page: a bare, unstyled `404 Not Found` on an empty white page — no dropzone, no styles, no page content. The deployment would still report success, and `/health` and `/api/merge` would still respond, because Flask *does* serve those two paths. Check `GET /` first, not just the API.
 
 #### Smoke test
 
@@ -230,7 +225,7 @@ Run all three against the deployed URL. All three must behave as listed.
 
 | Check | Expected |
 |---|---|
-| `GET /` | `200`, styled page containing the heading `TIFF Merger`. A bare unstyled 404 means the framework preset is wrong — see the remedy above. |
+| `GET /` | `200`, styled page containing the heading `TIFF Merger`. A bare unstyled 404 means the framework preset is wrong. |
 | `GET /health` | `200` with `content-type: application/json` and body `{"max_files":20,"max_image_pixels":50000000,"max_request_bytes":4194304,"status":"ok"}` |
 | `POST /api/merge` with two `.tif` parts | `200` with `content-type: image/tiff` and `content-disposition` naming `merged_output.tif`; the body opens as a 2-page TIFF |
 
@@ -247,7 +242,7 @@ curl -sS -X POST https://<your-domain>/api/merge \
 
 ## Open items and recommendations
 
-- **The framework preset is the one unverifiable-from-CI risk.** Nothing in this repository or its CI can detect a wrong preset; it needs one manual check per new Vercel project, as described in [Required first-deploy check](#required-first-deploy-check-the-framework-preset). If the project is ever recreated on Vercel, repeat the check — it is not a one-time event.
+- **The framework preset is pinned in `vercel.json` and guarded by tests**, so the failure mode that would take the whole site down is now closed in the repository. The dashboard check and the smoke test still need a human once per new Vercel project, as described in [First deploy](#first-deploy-what-a-repository-cannot-check).
 - **There is no authentication or rate limiting on `/api/merge`.** It is intentionally public and unauthenticated: adding auth would require a committed secret or edge-level work that was left out of scope. The resource bounds (4 MB, 20 files, 50M pixels) are the only protection, and they bound per-request cost rather than request rate.
 - **A merge whose output exceeds 4.5 MB cannot be served from this architecture.** The 4.5 MB response cap is enforced by Vercel below the application. Lifting it means client-direct upload to Vercel Blob, which is a redesign rather than a config change.
 - **There is no Python dependency audit in CI.** Node advisories are gated by `npm audit --audit-level=high`; the Python side has no equivalent, so a Pillow or Werkzeug advisory would only be found by remembering to check. Adding `pip-audit` as a CI step is the obvious follow-up.

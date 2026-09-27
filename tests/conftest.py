@@ -3,7 +3,7 @@ import io
 import pytest
 from PIL import Image
 
-from api.index import app
+from api.merge import app
 
 
 def _tiff_bytes(mode="L", size=(32, 32), compression="raw", color=100):

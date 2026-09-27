@@ -3,7 +3,7 @@ import io
 import pytest
 from PIL import Image
 
-from api.index import OUTPUT_COMPRESSION, MergeError, merge_images
+from api.merge import OUTPUT_COMPRESSION, MergeError, merge_images
 
 TIFF_COMPRESSION = {"tiff_adobe_deflate": 8, "raw": 1}
 

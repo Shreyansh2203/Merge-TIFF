@@ -3,8 +3,8 @@ import io
 import pytest
 from PIL import Image
 
-from api import index as merge_module
-from api.index import MAX_FILES, MAX_IMAGE_PIXELS, MAX_REQUEST_BYTES
+from api import merge as merge_module
+from api.merge import MAX_FILES, MAX_IMAGE_PIXELS, MAX_REQUEST_BYTES
 
 
 def test_health_reports_limits(client):

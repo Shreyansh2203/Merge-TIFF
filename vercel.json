@@ -1,13 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/health", "destination": "/api/index.py" }
-  ],
+  "framework": "nextjs",
   "functions": {
-    "api/**/*.py": {
+    "api/merge.py": {
       "maxDuration": 30,
       "excludeFiles": "{tests/**,.pytest_cache/**,.venv/**,venv/**,**/__pycache__/**,*.pyc}"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/merge" },
+    { "source": "/health", "destination": "/api/merge" }
+  ]
 }
