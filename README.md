@@ -266,7 +266,7 @@ Other projects by the same author, each solving a different problem:
 
 - **[oracle-bip-reconciler](https://github.com/Shreyansh2203/oracle-bip-reconciler)** — a FastAPI service that matches an OCR'd remittance advice against invoice and receipt history in Oracle Fusion ERP Cloud BI Publisher, repairing the incoming JSON or marking it `UNMATCHED`.
 - **[OTL-Voice](https://github.com/Shreyansh2203/OTL-Voice)** — a phone-first web app that turns speech into a structured Oracle Fusion Cloud Time and Labour timecard proposal, using OCI Generative AI and Speech.
-- **[Product-Comparison-Advisor-AI-Agent](https://github.com/Shreyansh2203/Product-Comparison-Advisor---AI-Agent)** — an Oracle Fusion Cloud AI Agent that compares two or more Items across ~120 product and manufacturing attributes and returns a self-contained HTML comparison table.
+- **[Product-Comparison-Advisor-AI-Agent](https://github.com/Shreyansh2203/Product-Comparison-Advisor---AI-Agent)** — an Oracle Fusion Cloud AI Agent that compares two or more Items across 62 product and manufacturing attributes and returns a self-contained HTML comparison table.
 - **[Scraping-Bot](https://github.com/Shreyansh2203/Scraping-Bot)** — a Telegram bot that downloads the media behind an Instagram or Twitter/X link.
 
 ---
