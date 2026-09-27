@@ -2,6 +2,7 @@ import io
 
 import pytest
 from PIL import Image
+from werkzeug.test import EnvironBuilder
 
 from api import merge as merge_module
 from api.merge import (
@@ -9,7 +10,18 @@ from api.merge import (
     MAX_IMAGE_PIXELS,
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
+    MAX_TOTAL_IMAGE_PIXELS,
 )
+
+
+def _multipart(parts):
+    builder = EnvironBuilder(
+        method="POST",
+        data={"files": parts},
+        content_type="multipart/form-data",
+    )
+    environ = builder.get_environ()
+    return environ["wsgi.input"].getvalue(), environ["CONTENT_TYPE"]
 
 
 def test_health_reports_limits(client):
@@ -22,16 +34,15 @@ def test_health_reports_limits(client):
     assert payload["max_response_bytes"] == MAX_RESPONSE_BYTES
     assert payload["max_files"] == MAX_FILES
     assert payload["max_image_pixels"] == MAX_IMAGE_PIXELS
-
-
-def test_decompression_bomb_limit_is_configured():
-    assert Image.MAX_IMAGE_PIXELS == MAX_IMAGE_PIXELS
+    assert payload["max_total_image_pixels"] == MAX_TOTAL_IMAGE_PIXELS
 
 
 def test_resource_bounds_match_documented_values():
     assert MAX_REQUEST_BYTES == 4 * 1024 * 1024
+    assert MAX_RESPONSE_BYTES == 4 * 1024 * 1024
     assert MAX_FILES == 20
     assert MAX_IMAGE_PIXELS == 50_000_000
+    assert MAX_TOTAL_IMAGE_PIXELS == 50_000_000
 
 
 def test_merge_multiple_images_into_multipage_tiff(
@@ -334,6 +345,87 @@ def test_rejects_decompression_bomb(
 
     assert response.status_code == 400
     assert "pixels" in response.get_json()["error"]
+
+
+def test_pixel_budget_is_enforced_before_a_page_is_decoded(
+    client, make_tiff, monkeypatch
+):
+    path = make_tiff(name="big.tif", size=(64, 64))
+    monkeypatch.setattr(merge_module, "MAX_IMAGE_PIXELS", 128)
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("decoded a page before checking the pixel budget")
+
+    monkeypatch.setattr(Image.Image, "load", explode)
+
+    response = client.post(
+        "/api/merge",
+        data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert "4096 pixels" in response.get_json()["error"]
+
+
+def test_request_pixel_budget_spans_every_page(client, tiff_bytes, monkeypatch):
+    payload = tiff_bytes(size=(32, 32))
+    files = [(io.BytesIO(payload), f"f{index}.tif") for index in range(3)]
+    monkeypatch.setattr(merge_module, "MAX_TOTAL_IMAGE_PIXELS", 2 * 1024)
+
+    response = client.post(
+        "/api/merge",
+        data={"files": files},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "f2.tif" in error
+    assert "pixel budget" in error
+
+
+def test_request_within_the_pixel_budget_is_accepted(
+    client, pages, tiff_bytes, monkeypatch
+):
+    payload = tiff_bytes(size=(32, 32))
+    files = [(io.BytesIO(payload), f"f{index}.tif") for index in range(3)]
+    monkeypatch.setattr(merge_module, "MAX_TOTAL_IMAGE_PIXELS", 3 * 1024)
+
+    response = client.post(
+        "/api/merge",
+        data={"files": files},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert len(pages(response.data)) == 3
+
+
+def test_chunked_upload_without_content_length_is_accepted(
+    post_without_content_length, tiff_bytes
+):
+    body, content_type = _multipart([(io.BytesIO(tiff_bytes()), "page.tif")])
+
+    captured = post_without_content_length("/api/merge", [body], content_type)
+
+    assert captured["status"].startswith("200")
+    assert captured["headers"]["Content-Type"] == "image/tiff"
+    assert captured["body"][:4] in (b"II*\x00", b"MM\x00*")
+
+
+def test_chunked_upload_without_content_length_is_bounded(
+    post_without_content_length, tiff_bytes
+):
+    body, content_type = _multipart([(io.BytesIO(tiff_bytes()), "page.tif")])
+    padding = b"\x00" * (MAX_REQUEST_BYTES + 4096)
+
+    captured = post_without_content_length(
+        "/api/merge", [body, padding], content_type
+    )
+
+    assert captured["status"].startswith("413")
+    assert b"too large" in captured["body"].lower()
 
 
 def test_rejects_corrupt_tiff_among_valid_files(client, make_tiff, tmp_path):

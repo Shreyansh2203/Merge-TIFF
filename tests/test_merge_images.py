@@ -112,6 +112,63 @@ def test_mixed_bit_depths_are_preserved():
     assert depths == [("L", (8,)), ("I;16", (16,))]
 
 
+# Mode, BitsPerSample, SamplesPerPixel and PhotometricInterpretation of a page
+# that has been through merge_images. Photometric is the tag that decides what
+# a sample value *means*, so asserting it is what catches a page that is
+# structurally valid but has had its polarity or colour meaning changed.
+MERGED_PAGE_TAGS = [
+    ("L", (8,), None, 1),
+    ("RGB", (8, 8, 8), 3, 2),
+    ("RGBA", (8, 8, 8, 8), 4, 2),
+    ("I;16", (16,), None, 1),
+    ("1", (1,), None, 1),
+]
+
+
+@pytest.mark.parametrize("mode,bits,samples,photometric", MERGED_PAGE_TAGS)
+def test_every_mode_keeps_its_interpretation(mode, bits, samples, photometric):
+    data = merge_images([_page("page.tif", mode=mode, size=(16, 16))])
+
+    image = _open(data)
+    image.load()
+    assert image.mode == mode
+    assert image.tag_v2.get(258) == bits
+    assert image.tag_v2.get(277) == samples
+    assert image.tag_v2.get(262) == photometric
+
+
+def test_pixels_of_every_mode_survive_a_mixed_merge():
+    originals = {}
+    pages = []
+    for name, (mode, _bits, _samples, _photometric) in zip(
+        ("gray.tif", "rgb.tif", "rgba.tif", "depth.tif", "bilevel.tif"),
+        MERGED_PAGE_TAGS,
+    ):
+        image = Image.new(mode, (16, 16))
+        pixels = image.load()
+        for y in range(16):
+            for x in range(16):
+                if mode == "1":
+                    pixels[x, y] = 1 if (x + y) % 2 else 0
+                elif mode == "I;16":
+                    pixels[x, y] = (x * 4097 + y * 257) % 65536
+                elif mode == "RGBA":
+                    pixels[x, y] = (x * 16, y * 16, 7, (x * 16 + y) % 256)
+                elif mode == "RGB":
+                    pixels[x, y] = (x * 16, y * 16, 7)
+                else:
+                    pixels[x, y] = (x * 16 + y) % 256
+        originals[name] = image.tobytes()
+        pages.append((name, image))
+
+    image = _open(merge_images(pages))
+
+    for index, name in enumerate(originals):
+        image.seek(index)
+        image.load()
+        assert image.tobytes() == originals[name], name
+
+
 def test_bilevel_and_palette_pages_are_rejected():
     pages = [
         _page("bilevel.tif", mode="1", size=(16, 16)),

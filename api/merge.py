@@ -22,6 +22,13 @@ MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_FILES = 20
 MAX_IMAGE_PIXELS = 50_000_000
+# Pillow's own gate only raises above twice MAX_IMAGE_PIXELS and merely warns
+# above it, so it bounds one image at 100M pixels and bounds nothing at all
+# across a 20-file request. This is the budget for the decoded pixel data a
+# single request may materialise, and it is checked from the TIFF header before
+# any page is decoded. At four bytes per pixel it caps the decoded pages of one
+# invocation at roughly 200 MB.
+MAX_TOTAL_IMAGE_PIXELS = 50_000_000
 TIFF_SUFFIXES = (".tif", ".tiff")
 OUTPUT_FILENAME = "merged_output.tif"
 OUTPUT_MIME = "image/tiff"
@@ -104,7 +111,7 @@ def merge_images(pages):
     return payload
 
 
-def _decode_upload(storage):
+def _decode_upload(storage, remaining_pixels):
     name = storage.filename
     suffix = os.path.splitext(name)[1].lower()
     if suffix not in TIFF_SUFFIXES:
@@ -126,6 +133,26 @@ def _decode_upload(storage):
     if image.format != "TIFF":
         raise MergeError(f"{name!r} is not a TIFF image.")
 
+    width, height = image.size
+    pixels = width * height
+    if pixels > MAX_IMAGE_PIXELS:
+        logger.warning("Rejected oversized image %r: %d pixels", name, pixels)
+        raise MergeError(
+            f"{name!r} expands to {pixels} pixels, over the "
+            f"{MAX_IMAGE_PIXELS} this service will decode in one image."
+        )
+    if pixels > remaining_pixels:
+        logger.warning(
+            "Rejected request over the pixel budget at %r: %d pixels left",
+            name,
+            remaining_pixels,
+        )
+        raise MergeError(
+            f"{name!r} would take this request past the "
+            f"{MAX_TOTAL_IMAGE_PIXELS} pixel budget for a single merge. "
+            "Upload fewer pages, or split them into several merges."
+        )
+
     try:
         image.load()
     except Image.DecompressionBombError as exc:
@@ -137,7 +164,7 @@ def _decode_upload(storage):
         logger.warning("Rejected undecodable upload %r: %r", name, exc)
         raise MergeError(f"{name!r} contains corrupt TIFF data.") from exc
 
-    return os.path.basename(name), image
+    return os.path.basename(name), image, pixels
 
 
 @app.get("/health")
@@ -148,6 +175,7 @@ def health():
         max_response_bytes=MAX_RESPONSE_BYTES,
         max_files=MAX_FILES,
         max_image_pixels=MAX_IMAGE_PIXELS,
+        max_total_image_pixels=MAX_TOTAL_IMAGE_PIXELS,
     )
 
 
@@ -166,9 +194,12 @@ def merge_tiffs():
         ), 400
 
     pages = []
+    remaining_pixels = MAX_TOTAL_IMAGE_PIXELS
     try:
         for storage in uploads:
-            pages.append(_decode_upload(storage))
+            name, image, pixels = _decode_upload(storage, remaining_pixels)
+            remaining_pixels -= pixels
+            pages.append((name, image))
         merged = merge_images(pages)
     except MergeError as exc:
         return jsonify(error=exc.message), exc.status

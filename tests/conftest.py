@@ -47,6 +47,54 @@ def client():
 
 
 @pytest.fixture
+def post_without_content_length():
+    """Post a body the way a chunked upload arrives: no Content-Length.
+
+    Werkzeug bounds a stream of unknown length only when the server declares
+    `wsgi.input_terminated`, which is what Vercel's runtime and the Werkzeug
+    development server both do. With no Content-Length and no such declaration
+    it refuses to read the body at all, so every path is bounded.
+    """
+    app.config["TESTING"] = True
+    captured = {}
+    written = []
+
+    def start_response(status, response_headers, exc_info=None):
+        captured["status"] = status
+        captured["headers"] = dict(response_headers)
+        return written.append
+
+    def _post(path, chunks, content_type="multipart/form-data"):
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": path,
+            "SERVER_NAME": "localhost",
+            "SERVER_PORT": "80",
+            "SERVER_PROTOCOL": "HTTP/1.1",
+            "CONTENT_TYPE": content_type,
+            "wsgi.version": (1, 0),
+            "wsgi.url_scheme": "http",
+            "wsgi.input": io.BytesIO(b"".join(chunks)),
+            "wsgi.input_terminated": True,
+            "wsgi.errors": io.StringIO(),
+            "wsgi.multithread": False,
+            "wsgi.multiprocess": False,
+            "wsgi.run_once": False,
+        }
+        assert "CONTENT_LENGTH" not in environ
+        app_iter = app(environ, start_response)
+        try:
+            for data in app_iter:
+                captured.setdefault("body", b"")
+                captured["body"] += data
+        finally:
+            app_iter.close()
+        return captured
+
+    return _post
+
+
+@pytest.fixture
 def tiff_bytes():
     return _tiff_bytes
 
