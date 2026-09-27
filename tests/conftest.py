@@ -6,12 +6,13 @@ from PIL import Image
 from api.merge import app
 
 
-def _tiff_bytes(mode="L", size=(32, 32), compression="raw", color=100):
+def _tiff_bytes(mode="L", size=(32, 32), compression="raw", color=100, tiffinfo=None):
     image = Image.new(mode, size, color)
     if mode in ("P", "PA"):
         image.putpalette([0, 0, 0] + [1, 2, 3] * 255)
     buffer = io.BytesIO()
-    image.save(buffer, format="TIFF", compression=compression)
+    save_kwargs = {} if tiffinfo is None else {"tiffinfo": tiffinfo}
+    image.save(buffer, format="TIFF", compression=compression, **save_kwargs)
     return buffer.getvalue()
 
 

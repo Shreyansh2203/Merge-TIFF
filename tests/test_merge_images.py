@@ -143,6 +143,7 @@ def test_pixels_of_every_mode_survive_a_mixed_merge():
     for name, (mode, _bits, _samples, _photometric) in zip(
         ("gray.tif", "rgb.tif", "rgba.tif", "depth.tif", "bilevel.tif"),
         MERGED_PAGE_TAGS,
+        strict=True,
     ):
         image = Image.new(mode, (16, 16))
         pixels = image.load()
@@ -240,6 +241,67 @@ def test_oversized_merge_is_rejected_before_it_is_returned(monkeypatch):
     assert excinfo.value.status == 413
     assert "4.0 MB" in excinfo.value.message
     assert "fewer pages per request" in excinfo.value.message
+
+
+def test_the_response_ceiling_bites_while_the_merge_is_written(monkeypatch):
+    """The cap has to stop the writer, not measure it after the fact.
+
+    The ceiling used to be applied to getvalue(), so a merge bound for 400 MB
+    assembled all of it and then discovered it was too big, holding the decoded
+    pages, the buffer and a full second copy of the output at once. CappedBuffer
+    applies the same number while the bytes are produced, so the peak is the
+    cap plus at most the one write that would have crossed it.
+    """
+    monkeypatch.setattr(merge_module, "OUTPUT_COMPRESSION", "raw")
+    writes = []
+    buffers = []
+    capped = merge_module.CappedBuffer
+
+    class Spy(capped):
+        def __init__(self, cap):
+            super().__init__(cap)
+            buffers.append(self)
+
+        def write(self, data):
+            written = super().write(data)
+            writes.append(len(data))
+            return written
+
+    monkeypatch.setattr(merge_module, "CappedBuffer", Spy)
+    pages = [_page(f"page{n}.tif", size=(1200, 1200)) for n in range(3)]
+
+    with pytest.raises(MergeError) as excinfo:
+        merge_images(pages)
+
+    assert excinfo.value.status == 413
+    assert buffers, "merge_images did not write through CappedBuffer"
+    peak = buffers[0].peak
+    assert peak <= MAX_RESPONSE_BYTES, f"grew to {peak}, over the cap"
+    assert MAX_RESPONSE_BYTES - peak <= max(writes), (
+        f"stopped {MAX_RESPONSE_BYTES - peak} bytes short, which is more than "
+        f"the largest single write ({max(writes)}), so it did not stop at the cap"
+    )
+    assert peak < 3 * 1200 * 1200, "assembled every page before measuring"
+
+
+def test_a_merge_under_the_ceiling_is_returned_whole(monkeypatch):
+    """The capped writer must not truncate a merge that fits."""
+    monkeypatch.setattr(merge_module, "OUTPUT_COMPRESSION", "raw")
+    buffers = []
+    capped = merge_module.CappedBuffer
+
+    class Spy(capped):
+        def __init__(self, cap):
+            super().__init__(cap)
+            buffers.append(self)
+
+    monkeypatch.setattr(merge_module, "CappedBuffer", Spy)
+    pages = [_page("one.tif", size=(32, 32)), _page("two.tif", size=(32, 32))]
+
+    data = merge_images(pages)
+
+    assert len(data) == buffers[0].peak
+    assert _open(data).n_frames == 2
 
 
 def test_merge_at_the_response_ceiling_is_accepted(monkeypatch):
