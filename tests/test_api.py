@@ -22,6 +22,12 @@ def test_decompression_bomb_limit_is_configured():
     assert Image.MAX_IMAGE_PIXELS == MAX_IMAGE_PIXELS
 
 
+def test_resource_bounds_match_documented_values():
+    assert MAX_REQUEST_BYTES == 4 * 1024 * 1024
+    assert MAX_FILES == 20
+    assert MAX_IMAGE_PIXELS == 50_000_000
+
+
 def test_merge_multiple_images_into_multipage_tiff(
     client, make_tiff, pages
 ):
