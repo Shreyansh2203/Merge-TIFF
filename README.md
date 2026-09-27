@@ -59,7 +59,15 @@ The two dotted and solid edges into the function are the only routing in the pro
 
 ## Requirements
 
-- Node.js >= 20.9 (Next.js 16 minimum)
+- **Node.js >= 24** (Active LTS). This is deliberately stricter than Next.js 16,
+  whose own documented minimum is 20.9: **Node 20 reached end of life on
+  2026-04-30**, so a floor of 20.9 is a floor on an unsupported runtime. The
+  floor is 24 rather than 22 because 24 is the Active LTS line, and 22 is
+  Maintenance LTS with a shorter support window. The floor is enforced three
+  ways, so it cannot quietly regress: `engines.node` in `package.json` (npm
+  warns on install), a committed `.node-version` file (version managers and
+  `actions/setup-node` read it), and `node-version: "24"` in both workflows.
+  CI runs on 24.
 - Python >= 3.12 (matches the Vercel Python runtime default)
 
 ---
@@ -103,23 +111,60 @@ The two are joined for you. `next.config.mjs` is committed and carries a rewrite
 ```bash
 npm run lint                        # ESLint via eslint-config-next
 npm run test:ui                     # node --test, download-name and dev-rewrite config
+npm run test:ui:coverage            # the same tests, with the coverage thresholds
 npm run build                       # next build
 python -m ruff check .              # Python lint, rule set pinned in ruff.toml
-python -m pytest                    # Flask + Pillow merge tests
+python -m pytest                    # Flask + Pillow merge tests, with the coverage gate
 pip-audit -r requirements.txt       # known advisories in the Python dependency tree
+pip-audit -r requirements-dev.txt   # ...and in the developer tools, same gate
 npm audit --audit-level=high        # known advisories in the Node dependency tree
 ```
 
-CI runs lint, the client unit tests, build, `ruff` and pytest on every push to `main` and every pull request, plus three extra gates:
+Both jobs run on every push to `main` and every pull request, and between them
+they run ten steps: install, `pip-audit`, `ruff` and `pytest` in the Python job;
+install, `npm audit`, `eslint`, the client tests, the client coverage gate and
+`next build` in the frontend job. The four that are easy to get wrong:
 
 - `python -m ruff check .` — the Python rule set is written out in `ruff.toml` rather than left to ruff's defaults, so the gate cannot move when ruff is upgraded. `PLR2004` and `PLR0911` are switched off on purpose: comparing a literal against a named constant is the point of several tests, and the route has to branch once per gate.
-- `pip-audit -r requirements.txt` — fails on any advisory in the Python tree, including transitives such as Jinja2 and MarkupSafe. `pip-audit` is pinned in `requirements-dev.txt`; it is a developer tool and is not installed into the deployed function.
+- `pip-audit -r requirements.txt` — fails on any advisory in the Python tree, including transitives such as Jinja2 and MarkupSafe. `pip-audit` is pinned in `requirements-dev.txt`; it is a developer tool and is not installed into the deployed function. `requirements-dev.txt` is audited in the same step, so a developer tool cannot become an unmonitored dependency.
 - `npm audit --audit-level=high` — fails on a new high or critical advisory.
 - `npm run lint -- --max-warnings=0` — lint *warnings* fail the build, not just errors. Locally `npm run lint` stays permissive; pass `-- --max-warnings=0` yourself to reproduce CI.
 
 Both audits also run on their own schedule: `.github/workflows/security.yml` runs weekly on Monday against the dependency files as they are, so an advisory published against a version that is already pinned fails the build even when nothing in the repository has changed. Run it by hand from the **Actions** tab with **Run workflow** after a bump, before merging it.
 
 The pytest suite generates its fixtures in `tmp_path` with Pillow, so no binary test assets are committed.
+
+### Coverage is measured and gated, not asserted
+
+Both test suites report coverage and both fail the build when it drops. Neither
+number is aspirational: each threshold is set at or just below what the suite
+actually measures today, so a red build means a real regression rather than a
+target nobody reached.
+
+| Suite | How it is measured | Threshold | Today |
+|---|---|---|---|
+| Python (`api/merge.py`) | `pytest-cov` via `addopts` in `pytest.ini` | `--cov-fail-under=95` | **96.10%** (148 of 154 statements) |
+| Client (`src/lib/`, `next.config.mjs`) | `node --test --experimental-test-coverage` | 100% lines, branches and functions | **100%** on all three |
+
+`python -m pytest` needs no extra flag — the `--cov` options are in `addopts`,
+so the ordinary invocation is the gated one, and the `term-missing` table is
+printed in the same step. The six uncovered Python statements are a
+decompression bomb raised *during* `image.load()`, the defensive
+`if not parts` branch that `"files" not in request.files` already makes
+unreachable, the two fallback error handlers that specific Werkzeug exceptions
+would otherwise answer with HTML, and the `if __name__ == "__main__"` guard.
+They are left uncovered rather than excluded: there is not a `# pragma: no
+cover` anywhere in this repository, and adding one to make a number look better
+is the thing [CONTRIBUTING.md](CONTRIBUTING.md#things-that-will-be-rejected)
+rejects.
+
+The JavaScript number is scoped on purpose. `node --test` only measures the
+modules a test actually loads, so `--test-coverage-include` names them
+explicitly: the two pure-logic modules, `src/lib/downloadName.mjs` and
+`next.config.mjs`. The React component in `src/app/page.js` is not in that set,
+because `node:test` has no DOM and the component has no test — **100% here
+means the tested modules are fully covered, not that the whole frontend is.**
+Closing that gap needs a component test, not a bigger number.
 
 ---
 
@@ -260,6 +305,10 @@ curl -sS -X POST https://<your-domain>/api/merge \
 - **A merge whose output would exceed 4 MB is refused by this app, not the platform.** See [Limits and Behaviour](#limits-and-behaviour): the request is rejected with a `413` naming the ceiling and the two remedies that work. The platform's own 4.5 MB response cap is still the hard ceiling; the only way past it is client-direct upload to Vercel Blob, which is a redesign rather than a config change.
 - **The output is a re-encode, so the input's metadata is not preserved.** That is intentional and is documented above, but it is a behaviour change for anyone who was relying on a merged file to keep its XMP, resolution or colour profile.
 - **Both dependency ecosystems are audited.** `pip-audit` and `npm audit` gate every push and pull request, and again on a weekly schedule — see [Quality Gates](#quality-gates). Dependabot watches all three ecosystems (`github-actions`, `npm`, `pip`) weekly.
+- **Both test suites are measured for coverage and gated.** Closed in this pass: there was no coverage measurement at all before it, `/coverage` was gitignored with nothing producing it, `pytest-cov` was not a dependency, and `node --test` ran with no coverage. Both sides now report and both fail on a drop — see [Coverage is measured and gated](#coverage-is-measured-and-gated-not-asserted).
+- **`src/app/page.js` has no unit test, so the client coverage number does not include it.** The 100% figure covers the two modules that do have tests. This is the largest remaining coverage gap; closing it needs a component test, not a threshold change. `node:test` has no DOM, so that means a test-renderer dependency, which is a decision rather than a chore.
+- **There is no TypeScript.** The project is plain JavaScript with a `jsconfig.json` path alias. A `tsconfig.json` with `strict: true` and a `typecheck` script in CI is the obvious next step, but it is not a mechanical conversion: `downloadName.mjs` is imported both by the component and by `node --test`, so migrating it also changes what the test runner loads, and a typed `page.js` means typing a client component's refs, drag events and untyped `JSON.parse`. Recommended as a follow-up that is done on its own, with `next build` and the whole suite green before and after.
+- **ESLint is on 9.39.5, not the 10 line, and the bump is blocked upstream.** `eslint-config-next@16.3.6` sets `languageOptions.parser` to Next's bundled Babel ESLint parser for every `.js`/`.jsx`/`.mjs` file and declares `globals` for them; ESLint 10's `SourceCode.finalize` now calls `scopeManager.addGlobals()` on that parser's scope manager, which does not implement it, so **every linted file crashes** with `TypeError: scopeManager.addGlobals is not a function` before a single rule runs. Neither `next@16.3.6`'s bundled parser nor `typescript-eslint` (checked up to 8.70.1) has the method, and `eslint-config-next@16.3.6` itself only declares `eslint >=9.0.0` while three of its plugin dependencies still cap at `^9`. The fix has to land in `next`/`eslint-config-next`; forcing it here would mean overriding the parser this config ships, which would make the "ESLint via `eslint-config-next`" claim in the Quality Gates untrue. Dependabot's `eslint-10.11.0` branch is therefore not mergeable as it stands.
 
 ---
 
