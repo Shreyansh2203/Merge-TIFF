@@ -67,7 +67,9 @@ def test_rewrite_destinations_resolve_to_the_function_route(vercel_config):
 
 
 def test_function_file_loads_standalone_with_a_wsgi_app():
-    spec = importlib.util.spec_from_file_location("vc_handler", REPO_ROOT / FUNCTION_FILE)
+    spec = importlib.util.spec_from_file_location(
+        "vc_handler", REPO_ROOT / FUNCTION_FILE
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -80,3 +82,36 @@ def test_flask_serves_the_function_route_and_the_health_alias():
 
     assert FUNCTION_ROUTE in rules
     assert "/health" in rules
+
+
+def test_the_architecture_diagram_still_describes_the_routing(vercel_config):
+    """The README diagram is the one place all three routing facts meet.
+
+    `POST /api/merge`, `GET /health` and the two `vercel.json` rewrites are what
+    the browser, Flask and the platform each have to agree on, and a wrong
+    preset has already taken this site down once. A diagram drifts silently, so
+    every route and rewrite is asserted against the drawing, along with the
+    content type the function actually sends.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    diagram = readme.split("## Architecture", 1)[1].split("```")[1]
+
+    # `static` is the endpoint Flask registers for its own static folder, not a
+    # route this function declares.
+    flask_routes = sorted(
+        rule.rule
+        for rule in merge_module.app.url_map.iter_rules()
+        if rule.endpoint != "static"
+    )
+    for route in flask_routes:
+        assert route in diagram, f"Flask route {route} is not in the diagram"
+
+    for rewrite in vercel_config["rewrites"]:
+        for key in ("source", "destination"):
+            assert rewrite[key] in diagram, (
+                f"vercel.json {key} {rewrite[key]!r} is not in the diagram"
+            )
+
+    assert merge_module.OUTPUT_MIME in diagram, (
+        f"the diagram does not name the response type {merge_module.OUTPUT_MIME!r}"
+    )

@@ -37,17 +37,17 @@ npm run dev
 
 That serves the UI on <http://localhost:3000>.
 
-**Point the frontend at the function.** `next dev` has no `/api/merge` route of
-its own, so the browser's `fetch('/api/merge')` will 404 until you add a
-rewrite. Put this in `next.config.mjs`, and keep it out of the committed file —
-`vercel.json` is what routes the deployed copy, and a second rewrite in the
-Next config is a second thing to keep correct:
+The two are joined for you: `next.config.mjs` carries a rewrite that sends
+`/api/*` to <http://127.0.0.1:5328> in development, and it registers nothing when
+`NODE_ENV` is `production`, so the deployed copy is routed only by
+`vercel.json`. There is nothing to edit.
 
-```js
-async rewrites() {
-  return [{ source: '/api/:path*', destination: 'http://127.0.0.1:5328/api/:path*' }];
-}
-```
+## About `AGENTS.md` and `CLAUDE.md`
+
+They are vendored Next.js coding-agent guidance blocks — tooling for automated
+agents, not a claim that a human wrote this project. `CLAUDE.md` is a one-line
+`@AGENTS.md` include so the same block loads for both tools. Keep them in sync
+with the upstream block if Next.js changes it.
 
 ## The Flask-vs-Next architecture, in one paragraph
 
@@ -68,10 +68,11 @@ entrypoints (`app.py`, `index.py`, `server.py`, `main.py`, `wsgi.py`,
 ## Running the checks
 
 ```bash
-python -m pytest        # Flask + Pillow merge tests
-npm run test:ui         # node --test, download-name sanitisation
-npm run lint            # add -- --max-warnings=0 to match CI
-npm run build           # next build (Turbopack)
+python -m ruff check .    # Python lint; the rule set is pinned in ruff.toml
+python -m pytest          # Flask + Pillow merge tests
+npm run test:ui           # node --test, download-name and dev-rewrite config
+npm run lint              # add -- --max-warnings=0 to match CI
+npm run build             # next build (Turbopack)
 pip-audit -r requirements.txt
 npm audit --audit-level=high
 ```
