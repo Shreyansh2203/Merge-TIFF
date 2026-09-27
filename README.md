@@ -108,12 +108,17 @@ async rewrites() {
 npm run lint                        # ESLint via eslint-config-next
 npm run build                       # next build
 python -m pytest                    # Flask + Pillow merge tests
+pip-audit -r requirements.txt       # known advisories in the Python dependency tree
+npm audit --audit-level=high        # known advisories in the Node dependency tree
 ```
 
-CI runs the same three on every push to `main` and every pull request, plus two extra gates:
+CI runs lint, build and pytest on every push to `main` and every pull request, plus three extra gates:
 
+- `pip-audit -r requirements.txt` — fails on any advisory in the Python tree, including transitives such as Jinja2 and MarkupSafe. `pip-audit` is pinned in `requirements-dev.txt`; it is a developer tool and is not installed into the deployed function.
 - `npm audit --audit-level=high` — fails on a new high or critical advisory.
 - `npm run lint -- --max-warnings=0` — lint *warnings* fail the build, not just errors. Locally `npm run lint` stays permissive; pass `-- --max-warnings=0` yourself to reproduce CI.
+
+Both audits also run on their own schedule: `.github/workflows/security.yml` runs weekly on Monday against the dependency files as they are, so an advisory published against a version that is already pinned fails the build even when nothing in the repository has changed. Run it by hand from the **Actions** tab with **Run workflow** after a bump, before merging it.
 
 The pytest suite generates its fixtures in `tmp_path` with Pillow, so no binary test assets are committed.
 
@@ -247,7 +252,7 @@ curl -sS -X POST https://<your-domain>/api/merge \
 - **The framework preset is pinned in `vercel.json` and guarded by tests**, so the failure mode that would take the whole site down is now closed in the repository. The dashboard check and the smoke test still need a human once per new Vercel project, as described in [First deploy](#first-deploy-what-a-repository-cannot-check).
 - **There is no authentication or rate limiting on `/api/merge`.** It is intentionally public and unauthenticated: adding auth would require a committed secret or edge-level work that was left out of scope. The resource bounds (4 MB, 20 files, 50M pixels) are the only protection, and they bound per-request cost rather than request rate.
 - **A merge whose output would exceed 4 MB is refused by this app, not the platform.** See [Limits and Behaviour](#limits-and-behaviour): the request is rejected with a `413` that names the size and the limit. The platform's own 4.5 MB response cap is still the hard ceiling; the only way past it is client-direct upload to Vercel Blob, which is a redesign rather than a config change.
-- **There is no Python dependency audit in CI.** Node advisories are gated by `npm audit --audit-level=high`; the Python side has no equivalent, so a Pillow or Werkzeug advisory would only be found by remembering to check. Adding `pip-audit` as a CI step is the obvious follow-up.
+- **Both dependency ecosystems are audited.** `pip-audit` and `npm audit` gate every push and pull request, and again on a weekly schedule — see [Quality Gates](#quality-gates). Dependabot watches all three ecosystems (`github-actions`, `npm`, `pip`) weekly.
 
 ---
 
