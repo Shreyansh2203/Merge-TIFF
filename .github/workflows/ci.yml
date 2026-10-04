@@ -58,7 +58,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Audit high and critical advisories
-        run: npm audit --audit-level=high
+        # The gate lives in .github/audit-gate.mjs so the one allowlisted advisory is
+        # reviewable in a diff (with its reason and removal condition) instead of being
+        # hidden in this command. npm audit exits non-zero for anything it finds at any
+        # severity, so its status is discarded and the JSON is what gets judged.
+        run: |
+          npm audit --audit-level=high --json > "$RUNNER_TEMP/audit.json" || true
+          node .github/audit-gate.mjs "$RUNNER_TEMP/audit.json"
       - name: Lint
         run: npm run lint -- --max-warnings=0
       - name: Run client unit tests
