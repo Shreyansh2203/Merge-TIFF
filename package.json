@@ -14,7 +14,7 @@
     "test:ui:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"next.config.mjs\" --test-coverage-include=\"src/lib/**\" --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 \"tests/js/*.test.mjs\""
   },
   "dependencies": {
-    "next": "16.3.6",
+    "next": "16.3.8",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
