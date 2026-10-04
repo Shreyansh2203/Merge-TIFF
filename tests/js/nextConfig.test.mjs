@@ -49,3 +49,33 @@ describe('next.config.mjs rewrites', () => {
     }
   });
 });
+
+describe('next.config.mjs security headers', () => {
+  // The header list is pinned in full on purpose: adding a header is a
+  // security decision, and a drive-by edit should have to look at this test.
+  it('applies the baseline hardening headers to every route', async () => {
+    const entries = await nextConfig.headers();
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].source, '/:path*');
+
+    const byKey = Object.fromEntries(
+      entries[0].headers.map((header) => [header.key, header.value])
+    );
+    assert.equal(byKey['X-Content-Type-Options'], 'nosniff');
+    assert.equal(byKey['Referrer-Policy'], 'no-referrer');
+    assert.equal(byKey['X-Frame-Options'], 'DENY');
+
+    const csp = byKey['Content-Security-Policy'];
+    assert.ok(csp, 'Content-Security-Policy is set');
+    for (const directive of [
+      "default-src 'self'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+    ]) {
+      assert.ok(csp.includes(directive), `CSP contains ${directive}`);
+    }
+  });
+});

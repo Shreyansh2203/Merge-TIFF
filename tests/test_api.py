@@ -68,6 +68,13 @@ def test_health_reports_limits(client):
     assert payload["max_total_image_pixels"] == MAX_TOTAL_IMAGE_PIXELS
 
 
+def test_responses_refuse_mime_sniffing(client):
+    """Both response types (JSON and the TIFF itself) must not be sniffed."""
+    response = client.get("/health")
+
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_resource_bounds_match_documented_values():
     assert MAX_REQUEST_BYTES == 4 * 1024 * 1024
     assert MAX_RESPONSE_BYTES == 4 * 1024 * 1024

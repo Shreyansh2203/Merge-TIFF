@@ -6,9 +6,17 @@ import { buildOutputName } from '../lib/downloadName.mjs';
 
 const MAX_FILE_COUNT = 20;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+// The function's own maxDuration is 30 s (vercel.json); the client waits a
+// little longer so a slow upload does not get cut off mid-merge, then gives up
+// instead of spinning forever on a stalled connection.
+const MERGE_TIMEOUT_MS = 90_000;
 
 function fileKey(file) {
   return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function totalBytes(fileList) {
+  return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
 export default function Home() {
@@ -59,13 +67,22 @@ export default function Home() {
       return;
     }
 
-    setError('');
+    const existing = new Set(files.map(fileKey));
+    const unique = tiffFiles.filter((file) => !existing.has(fileKey(file)));
+    // The server rejects more than MAX_FILE_COUNT files; keep what fits and
+    // say so up front rather than failing after the upload has round-tripped.
+    const accepted = unique.slice(0, Math.max(MAX_FILE_COUNT - files.length, 0));
+
+    if (accepted.length < unique.length) {
+      setError(
+        `This service merges at most ${MAX_FILE_COUNT} files at once; the rest were not added.`
+      );
+    } else {
+      setError('');
+    }
     setNotice('');
 
-    setFiles((prev) => {
-      const existing = new Set(prev.map(fileKey));
-      return [...prev, ...tiffFiles.filter((f) => !existing.has(fileKey(f)))];
-    });
+    setFiles([...files, ...accepted]);
   };
 
   const removeFile = (indexToRemove) => {
@@ -92,6 +109,15 @@ export default function Home() {
       return;
     }
 
+    // The server enforces the same cap, but finding out before uploading is
+    // the difference between an instant message and a wasted 4 MB round trip.
+    if (totalBytes(files) > MAX_REQUEST_BYTES) {
+      setError(
+        'These files add up to more than the 4 MB this service accepts in one request. Remove some and try again.'
+      );
+      return;
+    }
+
     setIsMerging(true);
     setError('');
     setNotice('');
@@ -105,6 +131,7 @@ export default function Home() {
       const response = await fetch('/api/merge', {
         method: 'POST',
         body: formData,
+        signal: AbortSignal.timeout(MERGE_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -119,15 +146,24 @@ export default function Home() {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+      // Revoking on a 0 ms timeout can fire before the browser has started
+      // reading the blob (a known Firefox failure mode that drops the
+      // download), so give the download time to actually begin.
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 10_000);
 
       setNotice(`Merged ${files.length} file${files.length === 1 ? '' : 's'}.`);
     } catch (mergeError) {
-      setError(
-        mergeError instanceof Error
-          ? mergeError.message
-          : 'Failed to merge files.'
-      );
+      if (mergeError instanceof DOMException && mergeError.name === 'TimeoutError') {
+        setError(
+          'The merge took too long and was stopped. Try fewer or smaller files.'
+        );
+      } else {
+        setError(
+          mergeError instanceof Error
+            ? mergeError.message
+            : 'Failed to merge files.'
+        );
+      }
     } finally {
       setIsMerging(false);
     }

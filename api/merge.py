@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import re
 
 from flask import Flask, jsonify, request, send_file
 from PIL import Image, TiffImagePlugin
@@ -36,6 +37,12 @@ MAX_IMAGE_PIXELS = 50_000_000
 # invocation at roughly 200 MB.
 MAX_TOTAL_IMAGE_PIXELS = 50_000_000
 TIFF_SUFFIXES = (".tif", ".tiff")
+# Stripped from an uploaded filename before it is written into the output
+# TIFF's tags. os.path.basename does nothing about control bytes in a crafted
+# multipart filename, and tags 270/285 are delivered verbatim inside the file
+# handed back to the browser. Mirrors the class the client strips in
+# src/lib/downloadName.mjs.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
 OUTPUT_FILENAME = "merged_output.tif"
 OUTPUT_MIME = "image/tiff"
 OUTPUT_COMPRESSION = "tiff_adobe_deflate"
@@ -45,6 +52,14 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
 
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+
+@app.after_request
+def set_security_headers(response):
+    # Every response this service produces is either JSON or the merged TIFF;
+    # nosniff stops a browser reinterpreting either of them as active content.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 class MergeError(Exception):
@@ -114,6 +129,18 @@ def _mode_conflict(pages):
     return None
 
 
+def _safe_page_name(name):
+    """Reduce an uploaded filename to what the output TIFF may carry per page.
+
+    The name lands in the ImageDescription (270) and PageName (285) tags of the
+    delivered file, so control characters have to go here -- at the write
+    point -- rather than only in the client, which the request never has to
+    pass through. A name that is nothing but unsafe characters becomes "page".
+    """
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("", os.path.basename(name)).strip()
+    return cleaned or "page"
+
+
 def merge_images(pages):
     if not pages:
         raise MergeError("No valid TIFF images to merge.")
@@ -131,8 +158,9 @@ def merge_images(pages):
         with TiffImagePlugin.AppendingTiffWriter(buffer) as writer:
             for name, image in pages:
                 tiffinfo = TiffImagePlugin.ImageFileDirectory_v2()
-                tiffinfo[270] = name
-                tiffinfo[285] = name
+                safe_name = _safe_page_name(name)
+                tiffinfo[270] = safe_name
+                tiffinfo[285] = safe_name
                 _strip_source_tags(image)
                 image.save(
                     writer,

@@ -57,6 +57,29 @@ def test_every_page_keeps_its_own_name():
     assert found == [(name, name) for name in names]
 
 
+def test_control_characters_in_a_name_never_reach_the_output_tags():
+    """The tags the merge writes are delivered inside the file the user gets.
+
+    os.path.basename strips a path but not control bytes, so a crafted
+    multipart filename could write terminal escapes or NULs into tags 270/285.
+    The sanitiser runs at the tag write point, so this exercises merge_images
+    directly rather than trusting every caller to clean its names first.
+    """
+    data = merge_images([_page("bad\x00name\r\n.tif")])
+
+    image = _open(data)
+    assert image.tag_v2.get(270) == "badname.tif"
+    assert image.tag_v2.get(285) == "badname.tif"
+
+
+def test_a_name_that_is_only_unsafe_characters_falls_back_to_a_page_label():
+    data = merge_images([_page("\x00\x01\x7f")])
+
+    image = _open(data)
+    assert image.tag_v2.get(270) == "page"
+    assert image.tag_v2.get(285) == "page"
+
+
 def test_mixed_modes_and_compressions_are_preserved():
     pages = [
         _page("gray.tif", mode="L", compression="raw"),
