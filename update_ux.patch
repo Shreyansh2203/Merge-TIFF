@@ -1,0 +1,52 @@
+--- src/app/page.js
++++ src/app/page.js
+@@ -19,6 +19,14 @@
+   return fileList.reduce((sum, file) => sum + file.size, 0);
+ }
+
++function formatBytes(bytes) {
++  if (bytes === 0) return '0 B';
++  const k = 1024;
++  const sizes = ['B', 'KB', 'MB', 'GB'];
++  const i = Math.floor(Math.log(bytes) / Math.log(k));
++  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
++}
++
+ export default function Home() {
+   const [files, setFiles] = useState([]);
+   const [isDragging, setIsDragging] = useState(false);
+@@ -216,12 +224,19 @@
+         {files.length > 0 && (
+           <>
+             <p className="file-list-summary">
+-              {files.length} file{files.length === 1 ? '' : 's'} selected
++              {files.length} file{files.length === 1 ? '' : 's'} selected{' '}
++              <span style={{ fontWeight: 500 }} className={totalBytes(files) > MAX_REQUEST_BYTES ? 'text-danger' : ''}>
++                ({formatBytes(totalBytes(files))} total)
++              </span>
+             </p>
+             <div className="file-list">
+               {files.map((file, index) => (
+                 <div key={`${fileKey(file)}-${index}`} className="file-item">
+-                  <span>{file.name}</span>
++                  <span title={file.name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '0.5rem' }}>
++                    {file.name}{' '}
++                    <span style={{ color: 'var(--text-muted)', fontSize: '0.9em' }}>
++                      ({formatBytes(file.size)})
++                    </span>
++                  </span>
+                   <button
+                     type="button"
+                     onClick={() => removeFile(index)}
+@@ -242,6 +257,11 @@
+           onClick={handleMerge}
+           disabled={files.length === 0 || isMerging}
+           aria-busy={isMerging}
++          title={
++            files.length === 0
++              ? "Select at least one TIFF file to merge"
++              : totalBytes(files) > MAX_REQUEST_BYTES ? "Total file size exceeds 4 MB limit" : ""
++          }
+         >
+           {isMerging ? (
+             <>
