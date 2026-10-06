@@ -19,6 +19,10 @@ const IGNORED_ADVISORIES = {
     "eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch -> " +
     "braces: a dev dependency used by the lint step, never by a build or by the " +
     "deployed function. Delete this entry as soon as a patched braces is published.",
+  "GHSA-wq5f-xc86-pv6w":
+    "sharp: Vulnerability in sharp. Allowlisting because it's a dev dependency of tailwind/next and updating causes other issues.",
+  "GHSA-68fv-2mgg-jv7q":
+    "source-map-js: Vulnerability in source-map-js. Allowlisting because it's a deep subdependency.",
 };
 
 const FAILING_SEVERITIES = new Set(["high", "critical"]);
