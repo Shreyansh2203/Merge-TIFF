@@ -1,0 +1,3 @@
+## 2024-06-25 - Exposing Constraints and Explaining Disabled States
+**Learning:** Users can encounter errors unexpectedly if upload limits are hidden until submission. A simple display of the total file size in MB allows users to proactively manage constraints. Additionally, disabling the primary action button without explaining *why* leads to confusion.
+**Action:** Always surface known constraints (like file size or upload limits) in the UI before a submit action. Use the `title` attribute or tooltips on disabled buttons to explain what needs to be done to enable the action (e.g., 'Select files to merge').
