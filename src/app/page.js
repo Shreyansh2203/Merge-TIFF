@@ -219,7 +219,7 @@ export default function Home() {
         {files.length > 0 && (
           <>
             <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({ (totalBytes(files) / (1024 * 1024)).toFixed(2) } MB)
             </p>
             <div className="file-list">
               {files.map((file, index) => (
@@ -245,6 +245,7 @@ export default function Home() {
           onClick={handleMerge}
           disabled={files.length === 0 || isMerging}
           aria-busy={isMerging}
+          title={files.length === 0 ? 'Select files to merge' : (isMerging ? 'Merging...' : '')}
         >
           {isMerging ? (
             <>
