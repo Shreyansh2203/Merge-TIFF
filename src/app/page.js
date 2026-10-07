@@ -19,6 +19,14 @@ function totalBytes(fileList) {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -218,8 +226,8 @@ export default function Home() {
 
         {files.length > 0 && (
           <>
-            <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+            <p className="file-list-summary" aria-live="polite">
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({formatBytes(totalBytes(files))})
             </p>
             <div className="file-list">
               {files.map((file, index) => (
@@ -245,6 +253,7 @@ export default function Home() {
           onClick={handleMerge}
           disabled={files.length === 0 || isMerging}
           aria-busy={isMerging}
+          title={files.length === 0 ? "Add at least one TIFF file to merge" : "Merge selected files"}
         >
           {isMerging ? (
             <>
