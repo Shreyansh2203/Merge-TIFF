@@ -19,6 +19,16 @@ function totalBytes(fileList) {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  // Limit to MB since max request is 4 MB
+  const idx = Math.min(i, 2);
+  return parseFloat((bytes / Math.pow(k, idx)).toFixed(1)) + ' ' + sizes[idx];
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -219,12 +229,12 @@ export default function Home() {
         {files.length > 0 && (
           <>
             <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({formatBytes(totalBytes(files))} total)
             </p>
             <div className="file-list">
               {files.map((file, index) => (
                 <div key={`${fileKey(file)}-${index}`} className="file-item">
-                  <span>{file.name}</span>
+                  <span>{file.name} <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>({formatBytes(file.size)})</span></span>
                   <button
                     type="button"
                     onClick={() => removeFile(index)}
