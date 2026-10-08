@@ -1,0 +1,3 @@
+## 2025-01-20 - Surfacing Hidden Constraints
+**Learning:** Users cannot make informed decisions if constraints (like the 4 MB total upload size limit) are hidden until they attempt an action. Waiting until submission to show a "trial and error" failure is a frustrating experience.
+**Action:** Surface relevant contextual information (e.g., individual and total file sizes) inline before the user commits to the action, allowing them to adjust their input proactively and avoid the error entirely.
