@@ -169,15 +169,21 @@ export default function Home() {
     }
   };
 
+  const currentBytes = totalBytes(files);
+  const isOverSizeLimit = currentBytes > MAX_REQUEST_BYTES;
+  const displayError = isOverSizeLimit
+    ? 'These files add up to more than the 4 MB this service accepts in one request. Remove some and try again.'
+    : error;
+
   return (
     <main className="container">
       <div className="glass-panel">
         <h1>TIFF Merger</h1>
         <p className="subtitle">Combine multiple TIFF files effortlessly.</p>
 
-        {error && (
+        {displayError && (
           <p className="alert" role="alert">
-            {error}
+            {displayError}
           </p>
         )}
         {notice && (
@@ -219,7 +225,7 @@ export default function Home() {
         {files.length > 0 && (
           <>
             <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({(currentBytes / (1024 * 1024)).toFixed(2)} MB)
             </p>
             <div className="file-list">
               {files.map((file, index) => (
@@ -243,8 +249,9 @@ export default function Home() {
           type="button"
           className="btn-primary"
           onClick={handleMerge}
-          disabled={files.length === 0 || isMerging}
+          disabled={files.length === 0 || isMerging || isOverSizeLimit}
           aria-busy={isMerging}
+          title={isOverSizeLimit ? 'Total file size exceeds the 4MB limit' : undefined}
         >
           {isMerging ? (
             <>
