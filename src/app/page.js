@@ -19,12 +19,19 @@ function totalBytes(fileList) {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const isOverLimit = totalBytes(files) > MAX_REQUEST_BYTES;
   const fileInputRef = useRef(null);
 
   const openPicker = () => {
@@ -218,13 +225,18 @@ export default function Home() {
 
         {files.length > 0 && (
           <>
-            <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+            <p className="file-list-summary" aria-live="polite">
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({formatSize(totalBytes(files))})
             </p>
-            <div className="file-list">
+            {isOverLimit && (
+              <p className="alert" role="alert">
+                These files add up to more than the 4 MB this service accepts in one request. Remove some and try again.
+              </p>
+            )}
+            <div className="file-list" role="list">
               {files.map((file, index) => (
-                <div key={`${fileKey(file)}-${index}`} className="file-item">
-                  <span>{file.name}</span>
+                <div key={`${fileKey(file)}-${index}`} className="file-item" role="listitem">
+                  <span>{file.name} ({formatSize(file.size)})</span>
                   <button
                     type="button"
                     onClick={() => removeFile(index)}
@@ -243,7 +255,7 @@ export default function Home() {
           type="button"
           className="btn-primary"
           onClick={handleMerge}
-          disabled={files.length === 0 || isMerging}
+          disabled={files.length === 0 || isMerging || isOverLimit}
           aria-busy={isMerging}
         >
           {isMerging ? (
