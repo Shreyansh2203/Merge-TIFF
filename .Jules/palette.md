@@ -1,0 +1,3 @@
+## 2023-10-27 - Semantic ARIA lists and Proactive File Validation
+**Learning:** Adding semantic ARIA roles (`role="list"` and `role="listitem"`) combined with `aria-live="polite"` on summary elements creates a more intuitive and structured experience for screen reader users when managing dynamic file lists. Also, proactive validation of total file size on the client side, rather than waiting for a backend failure, significantly improves the user experience by providing immediate feedback.
+**Action:** Always apply explicit ARIA list roles to custom DOM structures acting as dynamic lists, ensure aggregate states (like item count or total size) use `aria-live="polite"` for automatic announcements, and validate constraint limits proactively before allowing form submissions.
