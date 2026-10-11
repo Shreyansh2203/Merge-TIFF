@@ -19,6 +19,14 @@ function totalBytes(fileList) {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(i === 2 ? 1 : 0)) + ' ' + sizes[i];
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -193,7 +201,7 @@ export default function Home() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          aria-label="Add TIFF files. Drag and drop, or press Enter to browse."
+          aria-label={`Add TIFF files. Max ${MAX_FILE_COUNT} files, up to 4 MB total. Drag and drop, or press Enter to browse.`}
         >
           <span className="dropzone-icon" aria-hidden="true">
             &#128196;
@@ -202,6 +210,8 @@ export default function Home() {
             Drag &amp; drop TIFF files here,
             <br />
             or click to select
+            <br />
+            <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>Max {MAX_FILE_COUNT} files, up to 4 MB total</span>
           </span>
         </button>
 
@@ -218,8 +228,8 @@ export default function Home() {
 
         {files.length > 0 && (
           <>
-            <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+            <p className="file-list-summary" aria-live="polite">
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({formatBytes(totalBytes(files))} / 4 MB)
             </p>
             <div className="file-list">
               {files.map((file, index) => (
