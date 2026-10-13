@@ -19,6 +19,12 @@ function totalBytes(fileList) {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
+function formatSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
+  return bytes + ' B';
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -219,12 +225,12 @@ export default function Home() {
         {files.length > 0 && (
           <>
             <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
+              {files.length} file{files.length === 1 ? '' : 's'} selected ({formatSize(totalBytes(files))} / 4.0 MB)
             </p>
             <div className="file-list">
               {files.map((file, index) => (
                 <div key={`${fileKey(file)}-${index}`} className="file-item">
-                  <span>{file.name}</span>
+                  <span title={file.name} className="truncate">{file.name} ({formatSize(file.size)})</span>
                   <button
                     type="button"
                     onClick={() => removeFile(index)}
@@ -243,8 +249,9 @@ export default function Home() {
           type="button"
           className="btn-primary"
           onClick={handleMerge}
-          disabled={files.length === 0 || isMerging}
+          disabled={files.length === 0 || isMerging || totalBytes(files) > MAX_REQUEST_BYTES}
           aria-busy={isMerging}
+          title={totalBytes(files) > MAX_REQUEST_BYTES ? "Total file size exceeds the 4 MB limit" : undefined}
         >
           {isMerging ? (
             <>
