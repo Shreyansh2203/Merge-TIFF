@@ -202,6 +202,11 @@ export default function Home() {
             Drag &amp; drop TIFF files here,
             <br />
             or click to select
+            {files.length === 0 && (
+              <span className="block text-sm mt-2 font-normal text-gray-500">
+                Max 20 files, up to 4 MB total
+              </span>
+            )}
           </span>
         </button>
 
@@ -243,8 +248,24 @@ export default function Home() {
           type="button"
           className="btn-primary"
           onClick={handleMerge}
-          disabled={files.length === 0 || isMerging}
+          disabled={
+            files.length === 0 ||
+            isMerging ||
+            totalBytes(files) > MAX_REQUEST_BYTES ||
+            files.length > MAX_FILE_COUNT
+          }
           aria-busy={isMerging}
+          title={
+            isMerging
+              ? 'Merging...'
+              : files.length === 0
+                ? 'Add at least one file to merge'
+                : files.length > MAX_FILE_COUNT
+                  ? 'File count exceeds 20'
+                  : totalBytes(files) > MAX_REQUEST_BYTES
+                    ? 'Total file size exceeds 4 MB limit'
+                    : 'Merge selected TIFFs'
+          }
         >
           {isMerging ? (
             <>
