@@ -1,0 +1,3 @@
+## 2025-05-18 - Native Disabled Buttons Swallow Context
+**Learning:** Native `disabled` attributes remove buttons from the tab sequence and prevent them from receiving focus. This means screen reader and keyboard users cannot easily discover why a button is disabled (e.g., via a `title` tooltip).
+**Action:** Use `aria-disabled="true"` instead of `disabled` for primary call-to-action buttons, retaining visual gray-out styling and tooltip visibility while ensuring they remain in the tab order. Ensure JavaScript event handlers block execution when `aria-disabled` is effectively true.
