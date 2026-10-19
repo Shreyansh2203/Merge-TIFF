@@ -181,11 +181,11 @@ p.subtitle {
   transition: background-color 0.2s;
 }
 
-.btn-primary:hover:not(:disabled) {
+.btn-primary:hover:not([aria-disabled="true"]) {
   background-color: var(--primary-hover);
 }
 
-.btn-primary:disabled {
+.btn-primary[aria-disabled="true"] {
   background-color: var(--border-color);
   color: var(--text-muted);
   cursor: not-allowed;
