@@ -105,7 +105,7 @@ export default function Home() {
   };
 
   const handleMerge = async () => {
-    if (files.length === 0) {
+    if (files.length === 0 || isMerging) {
       return;
     }
 
@@ -243,7 +243,8 @@ export default function Home() {
           type="button"
           className="btn-primary"
           onClick={handleMerge}
-          disabled={files.length === 0 || isMerging}
+          aria-disabled={files.length === 0 || isMerging ? "true" : "false"}
+          title={files.length === 0 ? "Select at least one TIFF file to merge" : undefined}
           aria-busy={isMerging}
         >
           {isMerging ? (
