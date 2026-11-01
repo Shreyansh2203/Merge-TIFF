@@ -16,6 +16,7 @@ from api.merge import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+README_MISSING = not (REPO_ROOT / "README.md").is_file()
 
 # A number in a client error, with the unit a size is rendered in when it has
 # one. Used to check that the 4xx surface quotes nothing /health does not.
@@ -83,7 +84,7 @@ def test_resource_bounds_match_documented_values():
     assert MAX_TOTAL_IMAGE_PIXELS == 50_000_000
 
 
-@pytest.mark.skipif(not (REPO_ROOT / "README.md").is_file(), reason="README.md not found")
+@pytest.mark.skipif(README_MISSING, reason="README.md not found")
 def test_documented_limits_are_actually_published():
     """The numbers above are compared to literals, not to the documentation.
 

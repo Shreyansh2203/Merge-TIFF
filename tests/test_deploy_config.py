@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VERCEL_CONFIG = REPO_ROOT / "vercel.json"
 FUNCTION_FILE = "api/merge.py"
 FUNCTION_ROUTE = "/api/merge"
+README_MISSING = not (REPO_ROOT / "README.md").is_file()
 
 # Vercel loads a Python framework from these exact filenames, at the project
 # root or inside one of these directories, and then reads a top-level `app`.
@@ -84,7 +85,7 @@ def test_flask_serves_the_function_route_and_the_health_alias():
     assert "/health" in rules
 
 
-@pytest.mark.skipif(not (REPO_ROOT / "README.md").is_file(), reason="README.md not found")
+@pytest.mark.skipif(README_MISSING, reason="README.md not found")
 def test_the_architecture_diagram_still_describes_the_routing(vercel_config):
     """The README diagram is the one place all three routing facts meet.
 
