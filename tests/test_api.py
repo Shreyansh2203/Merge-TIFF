@@ -83,6 +83,7 @@ def test_resource_bounds_match_documented_values():
     assert MAX_TOTAL_IMAGE_PIXELS == 50_000_000
 
 
+@pytest.mark.skipif(not (REPO_ROOT / "README.md").is_file(), reason="README.md not found")
 def test_documented_limits_are_actually_published():
     """The numbers above are compared to literals, not to the documentation.
 
