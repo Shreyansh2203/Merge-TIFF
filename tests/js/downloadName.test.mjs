@@ -121,4 +121,49 @@ describe('buildOutputName', () => {
 
     assert.ok(name.length <= MAX_OUTPUT_STEM_LENGTH + OUTPUT_SUFFIX.length);
   });
+
+  it('truncates long combined summary even with few stems', () => {
+    const longStem = 'a'.repeat(MAX_STEM_LENGTH);
+    const name = buildOutputName([`${longStem}.tif`, `${longStem}.tif`, `${longStem}.tif`]);
+    const stem = name.slice(0, name.length - OUTPUT_SUFFIX.length);
+    assert.equal(stem.length, MAX_OUTPUT_STEM_LENGTH);
+  });
+
+  it('filters out names that sanitize to empty while keeping valid ones', () => {
+    const name = buildOutputName(['valid.tif', '.txt', 'another.tif']);
+    assert.equal(name, 'valid_another_merged.tif');
+  });
+
+  it('returns fallback when all names sanitize to empty', () => {
+    const name = buildOutputName(['.txt', '.log', '.csv']);
+    assert.equal(name, 'merged_document.tif');
+  });
+
+  it('joins with _and_N_more when more than 4 stems', () => {
+    const name = buildOutputName([
+      'one.tif', 'two.tif', 'three.tif', 'four.tif', 'five.tif',
+    ]);
+    assert.equal(name, 'one_two_three_and_2_more_merged.tif');
+  });
+
+  it('collapses whitespace in stems', () => {
+    const name = buildOutputName(['my  file  name.tif']);
+    assert.equal(name, 'my file name_merged.tif');
+  });
+
+  it('removes unsafe filename characters', () => {
+    const name = buildOutputName(['my<file>:name.tif']);
+    assert.equal(name, 'myfilename_merged.tif');
+  });
+
+  it('trims whitespace after stem slicing', () => {
+    const name = buildOutputName(['  spaced.tif']);
+    assert.equal(name, 'spaced_merged.tif');
+  });
+
+  it('handles single stem longer than MAX_OUTPUT_STEM_LENGTH', () => {
+    const longStem = 'a'.repeat(200);
+    const name = buildOutputName([`${longStem}.tif`]);
+    assert.equal(name.length, MAX_STEM_LENGTH + OUTPUT_SUFFIX.length);
+  });
 });

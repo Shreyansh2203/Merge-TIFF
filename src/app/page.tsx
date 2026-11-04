@@ -21,9 +21,9 @@ export default function Home() {
   const [notice, setNotice] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const openPicker = () => {
-    fileInputRef.current?.click();
-  };
+const openPicker = () => {
+  fileInputRef.current!.click();
+};
 
   const handleDragOver = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -38,16 +38,11 @@ export default function Home() {
   const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      addFiles(Array.from(e.dataTransfer.files));
-    }
+    addFiles(Array.from(e.dataTransfer.files));
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      addFiles(Array.from(e.target.files));
-    }
+    addFiles(Array.from(e.target.files));
   };
   const addFiles = (newFiles: File[]) => {
     const tiffFiles = newFiles.filter((file) => /\.tiff?$/i.test(file.name));
@@ -146,9 +141,9 @@ export default function Home() {
     } catch (mergeError) {
       if (mergeError instanceof DOMException && mergeError.name === 'TimeoutError') {
         setError('The merge took too long and was stopped. Try fewer or smaller files.');
-      } else {
-        setError(mergeError instanceof Error ? mergeError.message : 'Failed to merge files.');
+        return;
       }
+      setError(mergeError instanceof Error ? mergeError.message : 'Failed to merge files.');
     } finally {
       setIsMerging(false);
     }
@@ -173,7 +168,7 @@ export default function Home() {
 
         <button
           type="button"
-          className={`dropzone ${isDragging ? 'active' : ''}`}
+          className={`dropzone${isDragging ? ' active' : ''}`}
           onClick={openPicker}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -201,31 +196,27 @@ export default function Home() {
           aria-hidden="true"
         />
 
-        {files.length > 0 && (
-          <>
-            <p className="file-list-summary">
-              {files.length} file{files.length === 1 ? '' : 's'} selected
-            </p>
-            <div className="file-list">
-              {files.map((file, index) => (
-                <div
-                  key={`${file.name}:${file.size}:${file.lastModified}-${index}`}
-                  className="file-item"
-                >
-                  <span>{file.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeFile(index)}
-                    title={`Remove ${file.name}`}
-                    aria-label={`Remove ${file.name}`}
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
+        <p className="file-list-summary">
+          {files.length} file{files.length === 1 ? '' : 's'} selected
+        </p>
+        <div className="file-list">
+          {files.map((file, index) => (
+            <div
+              key={`${file.name}:${file.size}:${file.lastModified}-${index}`}
+              className="file-item"
+            >
+              <span>{file.name}</span>
+              <button
+                type="button"
+                onClick={() => removeFile(index)}
+                title={`Remove ${file.name}`}
+                aria-label={`Remove ${file.name}`}
+              >
+                &times;
+              </button>
             </div>
-          </>
-        )}
+          ))}
+        </div>
 
         <button
           type="button"

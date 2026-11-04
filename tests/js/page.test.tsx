@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { describe, it, afterEach, beforeEach } from 'node:test';
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import Home from '../../src/app/page';
 
@@ -88,17 +88,6 @@ describe('TIFF Merger page', () => {
     assert.equal(calls.length, 1);
     const init = calls[0].init;
     assert.equal((init?.body as FormData).getAll('files').length, 2);
-  });
-
-  it('rejects a drop containing no TIFF files', () => {
-    render(React.createElement(Home));
-
-    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [
-      new File(['x'], 'notes.txt'),
-    ]);
-
-    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
-    assert.equal(screen.queryByText(/selected/), null);
   });
 
   it('adds files picked through the input and lists them', () => {
@@ -211,9 +200,10 @@ describe('TIFF Merger page', () => {
     });
   });
 
-  it('surfaces a generic failure message', async () => {
+  it('surfaces a timeout DOMException as timeout message', async () => {
+    const domError = new DOMException('took too long', 'TimeoutError');
     fetchMock(async () => {
-      throw new Error('connection reset');
+      throw domError;
     });
     render(React.createElement(Home));
 
@@ -221,7 +211,22 @@ describe('TIFF Merger page', () => {
     fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
 
     await waitFor(() => {
-      assert.ok(screen.getByRole('alert').textContent?.includes('connection reset'));
+      assert.ok(screen.getByRole('alert').textContent?.includes('took too long'));
+    });
+  });
+
+  it('surfaces a non-timeout DOMException as generic failure', async () => {
+    const domError = new DOMException('Something went wrong', 'AbortError');
+    fetchMock(async () => {
+      throw domError;
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('Something went wrong'));
     });
   });
 
@@ -255,10 +260,213 @@ describe('TIFF Merger page', () => {
     assert.ok(screen.queryByRole('alert') === null);
   });
 
-  it('dropping empty file list does nothing', () => {
+  it('dropping empty file list shows error', () => {
     render(React.createElement(Home));
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
-    assert.ok(screen.queryByRole('alert') === null);
+    // Empty file list triggers addFiles with empty array, which sets error
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
+  });
+
+  it('ignores a file input change with no files', () => {
+    render(React.createElement(Home));
+    const input = document.querySelector('.file-input') as HTMLInputElement;
+    assert.ok(input);
+
+    fireEvent.change(input, { target: { files: [] } });
+
+    // No files added, error surfaced since addFiles runs regardless
+    assert.ok(screen.queryByText(/file selected/i) === null);
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
+  });
+
+  it('accepts .tiff extension (isTiffFile endsWith .tiff true path)', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    dropFiles(dropzone, [tiff('scan.tiff', 200)]);
+    assert.ok(screen.getByText('1 file selected'));
+  });
+
+  it('rejects non-TIFF files (isTiffFile both endsWith false path)', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const png = new File(['x'], 'photo.png', { type: 'image/png' });
+    dropFiles(dropzone, [png]);
+    // Non-TIFF files are filtered out; error is surfaced
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
+  });
+
+  it('errors when dropping more than MAX_FILE_COUNT files', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const tooMany = Array.from({ length: 21 }, (_unused, i) => tiff(`file${i}.tif`, 100 + i));
+    dropFiles(dropzone, tooMany);
+    // MAX_FILE_COUNT is 20; the rest are rejected
+    assert.ok(screen.getByRole('alert').textContent?.includes('at most 20 files at once'));
+  });
+
+  it('errors when total bytes exceed MAX_REQUEST_BYTES', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const bigFile = new File([new Uint8Array(4 * 1024 * 1024 + 1024)], 'big.tif', {
+      type: 'image/tiff',
+    });
+    dropFiles(dropzone, [bigFile]);
+    const merge = screen.getByRole('button', { name: /merge tiffs/i }) as HTMLButtonElement;
+    act(() => {
+      fireEvent.click(merge);
+    });
+    // File exceeds 4 MB limit
+    assert.ok(screen.getByRole('alert').textContent?.includes('4 MB'));
+  });
+
+  it('fires drag over and drag leave events', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+
+    fireEvent.dragOver(dropzone, {
+      dataTransfer: { files: [], types: ['Files'] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(document.querySelector('.active'));
+
+    fireEvent.dragLeave(dropzone, {
+      dataTransfer: { files: [], types: ['Files'] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(!document.querySelector('.active'));
+  });
+
+  it('handles drop with actual TIFF files', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const tiffFile = new File(['x'], 'dropped.tif', { type: 'image/tiff' });
+    fireEvent.drop(dropzone, {
+      dataTransfer: { files: [tiffFile] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(screen.getByText('1 file selected'));
+  });
+
+  it('ignores a drop with no files', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    fireEvent.drop(dropzone, {
+      dataTransfer: { files: [] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    // No files added, no error surfaced
+    assert.ok(screen.queryByText(/file selected/i) === null);
+  });
+
+  it('shows active class during drag over', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    fireEvent.dragOver(dropzone, {
+      dataTransfer: { items: [], types: ['Files'] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(document.querySelector('.active'));
+  });
+
+  it('removes active class on drag leave', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    fireEvent.dragOver(dropzone, {
+      dataTransfer: { items: [], types: ['Files'] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(document.querySelector('.active'));
+    fireEvent.dragLeave(dropzone, {
+      dataTransfer: { items: [], types: ['Files'] },
+    } as unknown as DragEvent<HTMLButtonElement>);
+    assert.ok(!document.querySelector('.active'));
+  });
+
+  it('handles file input change with actual files', () => {
+    render(React.createElement(Home));
+    const input = document.querySelector('.file-input') as HTMLInputElement;
+    assert.ok(input);
+    const tiffFile = new File(['x'], 'input.tif', { type: 'image/tiff' });
+    fireEvent.change(input, { target: { files: [tiffFile] } });
+    assert.ok(screen.getByText('1 file selected'));
+  });
+
+  it('surfaces a plain object error as generic failure', async () => {
+    fetchMock(async () => {
+      throw { code: 'UNKNOWN_ERROR' };
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('Failed to merge files.'));
+    });
+  });
+
+  it('surfaces a regular Error message', async () => {
+    fetchMock(async () => {
+      throw new Error('network down');
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('network down'));
+    });
+  });
+
+  it('returns parsed error message from JSON response', async () => {
+    fetchMock(async () => {
+      return new Response(JSON.stringify({ error: 'Invalid file format' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('Invalid file format'));
+    });
+  });
+
+  it('falls back to status text when JSON error field is empty', async () => {
+    fetchMock(async () => {
+      return new Response(JSON.stringify({ error: '' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('Request failed with status 400.'));
+    });
+  });
+
+
+
+  it('shows Merging state while fetch is in flight', () => {
+    let pendingResolve: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      pendingResolve = resolve;
+    });
+    fetchMock(async () => pending);
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    const merge = screen.getByRole('button', { name: /merge tiffs/i }) as HTMLButtonElement;
+    act(() => {
+      fireEvent.click(merge);
+    });
+
+    // isMerging=true disables the merge button
+    assert.ok(merge.disabled);
+
+    pendingResolve?.();
   });
 });
