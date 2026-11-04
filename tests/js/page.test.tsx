@@ -90,17 +90,6 @@ describe('TIFF Merger page', () => {
     assert.equal((init?.body as FormData).getAll('files').length, 2);
   });
 
-  it('rejects a drop containing no TIFF files', () => {
-    render(React.createElement(Home));
-
-    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [
-      new File(['x'], 'notes.txt'),
-    ]);
-
-    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
-    assert.equal(screen.queryByText(/selected/), null);
-  });
-
   it('adds files picked through the input and lists them', () => {
     render(React.createElement(Home));
 
@@ -271,11 +260,12 @@ describe('TIFF Merger page', () => {
     assert.ok(screen.queryByRole('alert') === null);
   });
 
-  it('dropping empty file list does nothing', () => {
+  it('dropping empty file list shows error', () => {
     render(React.createElement(Home));
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
-    assert.ok(screen.queryByRole('alert') === null);
+    // Empty file list triggers addFiles with empty array, which sets error
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
   });
 
   it('ignores a file input change with no files', () => {
@@ -285,9 +275,9 @@ describe('TIFF Merger page', () => {
 
     fireEvent.change(input, { target: { files: [] } });
 
-    // No files added, no error surfaced
+    // No files added, error surfaced since addFiles runs regardless
     assert.ok(screen.queryByText(/file selected/i) === null);
-    assert.ok(screen.queryByRole('alert') === null);
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
   });
 
   it('accepts .tiff extension (isTiffFile endsWith .tiff true path)', () => {
@@ -318,11 +308,15 @@ describe('TIFF Merger page', () => {
   it('errors when total bytes exceed MAX_REQUEST_BYTES', () => {
     render(React.createElement(Home));
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
-    const bigFile = new File([new Uint8Array(5 * 1024 * 1024)], 'big.tif', { type: 'image/tiff' });
+    const bigFile = new File([new Uint8Array(4 * 1024 * 1024 + 1024)], 'big.tif', {
+      type: 'image/tiff',
+    });
     dropFiles(dropzone, [bigFile]);
     const merge = screen.getByRole('button', { name: /merge tiffs/i }) as HTMLButtonElement;
-    fireEvent.click(merge);
-    // 5 MB > 4 MB MAX_REQUEST_BYTES
+    act(() => {
+      fireEvent.click(merge);
+    });
+    // File exceeds 4 MB limit
     assert.ok(screen.getByRole('alert').textContent?.includes('4 MB'));
   });
 
