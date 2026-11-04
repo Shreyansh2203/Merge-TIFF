@@ -121,4 +121,16 @@ describe('buildOutputName', () => {
 
     assert.ok(name.length <= MAX_OUTPUT_STEM_LENGTH + OUTPUT_SUFFIX.length);
   });
+
+  it('truncates long combined summary even with few stems', () => {
+    const longStem = 'a'.repeat(MAX_STEM_LENGTH);
+    const name = buildOutputName([`${longStem}.tif`, `${longStem}.tif`, `${longStem}.tif`]);
+    const stem = name.slice(0, name.length - OUTPUT_SUFFIX.length);
+    assert.equal(stem.length, MAX_OUTPUT_STEM_LENGTH);
+  });
+
+  it('filters out names that sanitize to empty while keeping valid ones', () => {
+    const name = buildOutputName(['valid.tif', '.txt', 'another.tif']);
+    assert.equal(name, 'valid_another_merged.tif');
+  });
 });
