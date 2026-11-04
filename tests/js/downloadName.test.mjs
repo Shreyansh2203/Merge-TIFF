@@ -133,4 +133,9 @@ describe('buildOutputName', () => {
     const name = buildOutputName(['valid.tif', '.txt', 'another.tif']);
     assert.equal(name, 'valid_another_merged.tif');
   });
+
+  it('returns fallback when all names sanitize to empty', () => {
+    const name = buildOutputName(['.txt', '.log', '.csv']);
+    assert.equal(name, 'merged_document.tif');
+  });
 });
