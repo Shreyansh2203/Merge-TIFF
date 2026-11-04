@@ -448,8 +448,6 @@ describe('TIFF Merger page', () => {
     });
   });
 
-
-
   it('shows Merging state while fetch is in flight', () => {
     let pendingResolve: (() => void) | undefined;
     const pending = new Promise<void>((resolve) => {
