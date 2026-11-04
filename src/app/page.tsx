@@ -38,9 +38,9 @@ const openPicker = () => {
   const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(false);
-
-    if (e.dataTransfer.files.length > 0) {
-      addFiles(Array.from(e.dataTransfer.files));
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      addFiles(Array.from(files));
     }
   };
 
