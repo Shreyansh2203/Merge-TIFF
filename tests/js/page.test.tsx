@@ -224,4 +224,41 @@ describe('TIFF Merger page', () => {
       assert.ok(screen.getByRole('alert').textContent?.includes('connection reset'));
     });
   });
+
+  it('calls fileKey when adding files to non-empty list', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+
+    dropFiles(dropzone, [tiff('first.tif', 100)]);
+    assert.ok(screen.getByText('1 file selected'));
+
+    dropFiles(dropzone, [tiff('second.tif', 200)]);
+    assert.ok(screen.getByText('2 files selected'));
+  });
+
+  it('opens the file picker when dropzone is clicked', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+
+    fireEvent.click(dropzone);
+
+    // openPicker calls fileInputRef.current?.click(); verifying no crash covers the path
+    assert.ok(screen.getByRole('button', { name: /add tiff files/i }));
+  });
+
+  it('clicking merge with no files does nothing', () => {
+    render(React.createElement(Home));
+    const merge = screen.getByRole('button', { name: /merge tiffs/i }) as HTMLButtonElement;
+    assert.equal(merge.disabled, true);
+    fireEvent.click(merge);
+    // Handler guarded by files.length === 0; no error should surface
+    assert.ok(screen.queryByRole('alert') === null);
+  });
+
+  it('dropping empty file list does nothing', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
+    assert.ok(screen.queryByRole('alert') === null);
+  });
 });

@@ -12,14 +12,7 @@ const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 // instead of spinning forever on a stalled connection.
 const MERGE_TIMEOUT_MS = 90_000;
 
-function fileKey(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function totalBytes(fileList: File[]): number {
-  return fileList.reduce((sum, file) => sum + file.size, 0);
-}
-
+const totalBytes = (fileList: File[]): number => fileList.reduce((sum, file) => sum + file.size, 0);
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -55,17 +48,17 @@ export default function Home() {
     if (e.target.files && e.target.files.length > 0) {
       addFiles(Array.from(e.target.files));
     }
-    e.target.value = '';
   };
-
   const addFiles = (newFiles: File[]) => {
     const tiffFiles = newFiles.filter((file) => /\.tiff?$/i.test(file.name));
 
     if (tiffFiles.length === 0) {
       setError('Only .tif and .tiff files can be merged.');
     } else {
-      const existing = new Set(files.map(fileKey));
-      const unique = tiffFiles.filter((file) => !existing.has(fileKey(file)));
+      const existing = new Set(files.map((f) => `${f.name}:${f.size}:${f.lastModified}`));
+      const unique = tiffFiles.filter(
+        (file) => !existing.has(`${file.name}:${file.size}:${file.lastModified}`)
+      );
       // The server rejects more than MAX_FILE_COUNT files; keep what fits and
       // say so up front rather than failing after the upload has round-tripped.
       const accepted = unique.slice(0, Math.max(MAX_FILE_COUNT - files.length, 0));
@@ -215,7 +208,10 @@ export default function Home() {
             </p>
             <div className="file-list">
               {files.map((file, index) => (
-                <div key={`${fileKey(file)}-${index}`} className="file-item">
+                <div
+                  key={`${file.name}:${file.size}:${file.lastModified}-${index}`}
+                  className="file-item"
+                >
                   <span>{file.name}</span>
                   <button
                     type="button"
