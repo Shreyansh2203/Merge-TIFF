@@ -326,12 +326,12 @@ describe('TIFF Merger page', () => {
 
     fireEvent.dragOver(dropzone, {
       dataTransfer: { files: [], types: ['Files'] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(document.querySelector('.active'));
 
     fireEvent.dragLeave(dropzone, {
       dataTransfer: { files: [], types: ['Files'] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(!document.querySelector('.active'));
   });
 
@@ -341,7 +341,7 @@ describe('TIFF Merger page', () => {
     const tiffFile = new File(['x'], 'dropped.tif', { type: 'image/tiff' });
     fireEvent.drop(dropzone, {
       dataTransfer: { files: [tiffFile] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(screen.getByText('1 file selected'));
   });
 
@@ -350,7 +350,7 @@ describe('TIFF Merger page', () => {
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.drop(dropzone, {
       dataTransfer: { files: [] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     // No files added, no error surfaced
     assert.ok(screen.queryByText(/file selected/i) === null);
   });
@@ -360,7 +360,7 @@ describe('TIFF Merger page', () => {
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.dragOver(dropzone, {
       dataTransfer: { items: [], types: ['Files'] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(document.querySelector('.active'));
   });
 
@@ -369,11 +369,11 @@ describe('TIFF Merger page', () => {
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.dragOver(dropzone, {
       dataTransfer: { items: [], types: ['Files'] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(document.querySelector('.active'));
     fireEvent.dragLeave(dropzone, {
       dataTransfer: { items: [], types: ['Files'] },
-    } as unknown as DragEvent<HTMLButtonElement>);
+    } as unknown as DragEvent);
     assert.ok(!document.querySelector('.active'));
   });
 
@@ -453,7 +453,7 @@ describe('TIFF Merger page', () => {
     const pending = new Promise<void>((resolve) => {
       pendingResolve = resolve;
     });
-    fetchMock(async () => pending);
+    fetchMock(async () => pending as unknown as Response);
     render(React.createElement(Home));
 
     dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
