@@ -21,9 +21,9 @@ export default function Home() {
   const [notice, setNotice] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-const openPicker = () => {
-  fileInputRef.current!.click();
-};
+  const openPicker = () => {
+    fileInputRef.current!.click();
+  };
 
   const handleDragOver = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
