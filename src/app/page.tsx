@@ -38,11 +38,11 @@ export default function Home() {
   const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    addFiles(Array.from(e.dataTransfer.files));
+    addFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    addFiles(Array.from(e.target.files));
+    addFiles(Array.from(e.target.files ?? []));
   };
   const addFiles = (newFiles: File[]) => {
     const tiffFiles = newFiles.filter((file) => /\.tiff?$/i.test(file.name));
