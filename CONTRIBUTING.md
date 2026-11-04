@@ -161,7 +161,7 @@ test(ui): cover the download filename invariants
 docs: describe the response ceiling in the API table
 ```
 
-Explain *why* in the body. A reviewer cannot see the deployment you just
+Explain _why_ in the body. A reviewer cannot see the deployment you just
 checked, the advisory you read, or the failure you reproduced; they can see
 the diff.
 

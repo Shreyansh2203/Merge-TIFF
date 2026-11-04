@@ -39,7 +39,7 @@ TIFF header before any page is decoded; the response cap is applied while the
 output is written, not after. `GET /health` publishes all of those limits, so
 they are information the caller could have had anyway.
 
-**Per-request *frequency* is not bounded in this repository.** There is no auth
+**Per-request _frequency_ is not bounded in this repository.** There is no auth
 and no rate limiter, by design — see the README's
 [Limits and Behaviour](README.md#limits-and-behaviour). The bounds above cap the
 cost of one request; nothing in the code caps how many requests arrive. Rate
@@ -69,6 +69,6 @@ of any file named like a Vercel framework entrypoint, are asserted by
 
 This project has no released versions. Security fixes land on `main`.
 
-| Branch  | Supported          |
-| ------- | ------------------ |
-| `main`  | :white_check_mark: |
+| Branch | Supported          |
+| ------ | ------------------ |
+| `main` | :white_check_mark: |

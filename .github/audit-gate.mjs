@@ -10,23 +10,23 @@
 // not what --audit-level=high means. Keeping the policy in this file makes the
 // exception reviewable in a diff instead of hidden inside a workflow command.
 
-import { readFileSync } from "node:fs";
+import { readFileSync } from 'node:fs';
 
 const IGNORED_ADVISORIES = {
-  "GHSA-vfj7-8cjw-p6xm":
-    "braces <= 3.0.3, stack exhaustion on deeply nested glob patterns, and no fixed " +
-    "release exists yet (advisory published 2026-09-18). The only path here is " +
-    "eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch -> " +
-    "braces: a dev dependency used by the lint step, never by a build or by the " +
-    "deployed function. Delete this entry as soon as a patched braces is published.",
+  'GHSA-vfj7-8cjw-p6xm':
+    'braces <= 3.0.3, stack exhaustion on deeply nested glob patterns, and no fixed ' +
+    'release exists yet (advisory published 2026-09-18). The only path here is ' +
+    'eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch -> ' +
+    'braces: a dev dependency used by the lint step, never by a build or by the ' +
+    'deployed function. Delete this entry as soon as a patched braces is published.',
 };
 
-const FAILING_SEVERITIES = new Set(["high", "critical"]);
-const path = process.argv[2] ?? "audit.json";
+const FAILING_SEVERITIES = new Set(['high', 'critical']);
+const path = process.argv[2] ?? 'audit.json';
 
 let report;
 try {
-  report = JSON.parse(readFileSync(path, "utf8"));
+  report = JSON.parse(readFileSync(path, 'utf8'));
 } catch (err) {
   console.error(`audit-gate: could not read an npm audit report from ${path}: ${err.message}`);
   process.exit(1);
@@ -38,9 +38,9 @@ try {
 // entry and, transitively, the parents that only inherit it.
 function parseVia(via) {
   return (via ?? []).map((entry) =>
-    typeof entry === "string"
+    typeof entry === 'string'
       ? { ref: entry, id: null }
-      : { ref: entry.name ?? null, id: entry.url?.split("/").pop() ?? null }
+      : { ref: entry.name ?? null, id: entry.url?.split('/').pop() ?? null }
   );
 }
 
@@ -49,7 +49,7 @@ const entries = new Map(
     name,
     {
       name,
-      severity: vulnerability.severity ?? "unknown",
+      severity: vulnerability.severity ?? 'unknown',
       via: parseVia(vulnerability.via),
     },
   ])
@@ -58,7 +58,11 @@ const entries = new Map(
 // Packages an allowlisted advisory is actually about.
 const allowed = new Set(
   [...entries.values()]
-    .filter((entry) => entry.via.some((ref) => ref.id) && entry.via.every((ref) => ref.id && IGNORED_ADVISORIES[ref.id]))
+    .filter(
+      (entry) =>
+        entry.via.some((ref) => ref.id) &&
+        entry.via.every((ref) => ref.id && IGNORED_ADVISORIES[ref.id])
+    )
     .map((entry) => entry.name)
 );
 
@@ -68,8 +72,8 @@ for (let pass = 0; pass < 10; pass++) {
   let grew = false;
   for (const entry of entries.values()) {
     if (allowed.has(entry.name) || entry.via.length === 0) continue;
-    const inheritsOnly = entry.via.every(
-      (ref) => (ref.id ? Boolean(IGNORED_ADVISORIES[ref.id]) : allowed.has(ref.ref))
+    const inheritsOnly = entry.via.every((ref) =>
+      ref.id ? Boolean(IGNORED_ADVISORIES[ref.id]) : allowed.has(ref.ref)
     );
     if (inheritsOnly) {
       allowed.add(entry.name);
@@ -89,7 +93,7 @@ for (const entry of entries.values()) {
     continue;
   }
   const ids = entry.via.map((ref) => ref.id ?? ref.ref).filter(Boolean);
-  unignored.push(`${entry.name} ${entry.severity}${ids.length ? ` [${ids.join(", ")}]` : ""}`);
+  unignored.push(`${entry.name} ${entry.severity}${ids.length ? ` [${ids.join(', ')}]` : ''}`);
 }
 
 if (ignored.length > 0) {
@@ -103,4 +107,4 @@ if (unignored.length > 0) {
   process.exit(1);
 }
 
-console.log("audit-gate: no unallowlisted high or critical advisories");
+console.log('audit-gate: no unallowlisted high or critical advisories');

@@ -2,6 +2,9 @@ import io
 import logging
 import os
 import re
+import time
+from collections import deque
+from threading import Lock
 
 from flask import Flask, jsonify, request, send_file
 from PIL import Image, TiffImagePlugin
@@ -36,6 +39,12 @@ MAX_IMAGE_PIXELS = 50_000_000
 # any page is decoded. At four bytes per pixel it caps the decoded pages of one
 # invocation at roughly 200 MB.
 MAX_TOTAL_IMAGE_PIXELS = 50_000_000
+# Rate limit: N requests per rolling window per client IP. A serverless function
+# instance keeps its own bucket, so behind a load balancer the effective limit
+# is N per instance. For a deployment with more than one instance, put Redis or
+# an edge rate limiter (Vercel WAF, Cloudflare, etc.) in front of /api/merge.
+RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_WINDOW_SECONDS = 60
 TIFF_SUFFIXES = (".tif", ".tiff")
 # Stripped from an uploaded filename before it is written into the output
 # TIFF's tags. os.path.basename does nothing about control bytes in a crafted
@@ -54,11 +63,127 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
+class RateLimiter:
+    """Fixed-window rate limiter keyed by client IP.
+
+    One bucket per IP per window. The window resets on first use and again after
+    ``RATE_LIMIT_WINDOW_SECONDS`` seconds, so a sustained client is limited to
+    ``RATE_LIMIT_REQUESTS`` per window. Not shared across serverless instances;
+    for multi-instance deployments, back this with Redis or an edge limiter.
+    """
+
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._buckets: dict[str, deque[float]] = {}
+        self._lock = Lock()
+
+    def check(self, key: str) -> tuple[bool, int, int]:
+        """Return (allowed, remaining, reset_at_epoch_seconds).
+
+        Increments the bucket when allowed; callers should use
+        :meth:`current_state` for read-only inspection.
+        """
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        with self._lock:
+            bucket = self._buckets.setdefault(key, deque())
+            # Drop timestamps older than the current window.
+            while bucket and bucket[0] <= window_start:
+                bucket.popleft()
+
+            remaining = self.max_requests - len(bucket)
+            if remaining <= 0:
+                reset_at = int(bucket[0] + self.window_seconds)
+                return False, 0, reset_at
+
+            bucket.append(now)
+            remaining = self.max_requests - len(bucket)
+            reset_at = int(now + self.window_seconds)
+            return True, remaining, reset_at
+
+    def current_state(self, key: str) -> tuple[int, int]:
+        """Return (remaining, reset_at_epoch_seconds) without incrementing."""
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if not bucket:
+                return self.max_requests, int(now + self.window_seconds)
+
+            # Drop timestamps older than the current window.
+            while bucket and bucket[0] <= window_start:
+                bucket.popleft()
+
+            remaining = self.max_requests - len(bucket)
+            if bucket:
+                reset_at = int(bucket[0] + self.window_seconds)
+            else:
+                reset_at = int(now + self.window_seconds)
+            return max(remaining, 0), reset_at
+
+
+_rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
+
+
+def _client_key() -> str:
+    """Best-effort client identifier for rate limiting.
+
+    X-Forwarded-For is used when present (the edge appends the client's address),
+    falling back to the socket peer. A forged leading X-Forwarded-For entry is
+    ignored because only the last entry -- the one the edge added -- is trusted.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.remote_addr or "unknown"
+
+
+@app.before_request
+def enforce_rate_limit():
+    # Only the merge endpoint is rate limited. Health checks are intentionally
+    # unthrottled so orchestrators can never be locked out, and method-not-allowed
+    # responses must not be masked by a rate-limit rejection.
+    if request.path != "/api/merge" or request.method != "POST":
+        return None
+
+    allowed, remaining, reset_at = _rate_limiter.check(_client_key())
+    if not allowed:
+        retry_after = max(reset_at - int(time.time()), 1)
+        return (
+            jsonify(
+                error=(
+                    "Rate limit exceeded. "
+                    f"Maximum {RATE_LIMIT_REQUESTS} requests per "
+                    f"{RATE_LIMIT_WINDOW_SECONDS} seconds per client. "
+                    f"Retry after {retry_after} seconds."
+                )
+            ),
+            429,
+            {
+                "X-RateLimit-Limit": str(RATE_LIMIT_REQUESTS),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": str(retry_after),
+            },
+        )
+
+    return None
+
+
 @app.after_request
 def set_security_headers(response):
     # Every response this service produces is either JSON or the merged TIFF;
     # nosniff stops a browser reinterpreting either of them as active content.
     response.headers["X-Content-Type-Options"] = "nosniff"
+    # Rate-limit visibility so clients can back off before hitting 429.
+    if request.path != "/health":
+        remaining, reset_at = _rate_limiter.current_state(_client_key())
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_REQUESTS)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(reset_at)
     return response
 
 

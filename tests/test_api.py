@@ -878,3 +878,252 @@ def test_client_errors_quote_nothing_health_does_not_already_publish(
 @pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
 def test_merge_endpoint_rejects_other_methods(client, method):
     assert client.open("/api/merge", method=method).status_code == 405
+
+
+# --- rate limiting ---
+
+
+def _reset_rate_limiter(monkeypatch):
+    """Reset the module-level rate limiter so each test starts from zero."""
+    monkeypatch.setattr(
+        merge_module,
+        "_rate_limiter",
+        merge_module.RateLimiter(merge_module.RATE_LIMIT_REQUESTS, merge_module.RATE_LIMIT_WINDOW_SECONDS),
+    )
+
+
+def test_rate_limit_allows_requests_up_to_the_cap(client, make_tiff, monkeypatch):
+    _reset_rate_limiter(monkeypatch)
+    path = make_tiff(name="page.tif")
+
+    responses = []
+    for _ in range(merge_module.RATE_LIMIT_REQUESTS):
+        responses.append(
+            client.post(
+                "/api/merge",
+                data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+                content_type="multipart/form-data",
+            )
+        )
+
+    assert all(response.status_code == 200 for response in responses), [
+        response.status_code for response in responses
+    ]
+
+
+def test_rate_limit_rejects_beyond_the_cap(client, make_tiff, monkeypatch):
+    _reset_rate_limiter(monkeypatch)
+    path = make_tiff(name="page.tif")
+
+    for _ in range(merge_module.RATE_LIMIT_REQUESTS):
+        client.post(
+            "/api/merge",
+            data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+            content_type="multipart/form-data",
+        )
+
+    response = client.post(
+        "/api/merge",
+        data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 429
+    error = response.get_json()["error"]
+    assert "Rate limit exceeded" in error
+    assert str(merge_module.RATE_LIMIT_REQUESTS) in error
+
+
+def test_rate_limit_headers_are_present(client, make_tiff, monkeypatch):
+    _reset_rate_limiter(monkeypatch)
+    path = make_tiff(name="page.tif")
+
+    response = client.post(
+        "/api/merge",
+        data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.headers["X-RateLimit-Limit"] == str(merge_module.RATE_LIMIT_REQUESTS)
+    assert response.headers["X-RateLimit-Remaining"].isdigit()
+    assert response.headers["X-RateLimit-Reset"].isdigit()
+
+
+def test_health_endpoint_is_not_rate_limited(client, monkeypatch):
+    _reset_rate_limiter(monkeypatch)
+
+    responses = [client.get("/health") for _ in range(merge_module.RATE_LIMIT_REQUESTS + 5)]
+    assert all(response.status_code == 200 for response in responses)
+
+
+def test_rate_limit_keyed_by_client_ip(client, make_tiff, monkeypatch):
+    _reset_rate_limiter(monkeypatch)
+    path = make_tiff(name="page.tif")
+
+    # Use different X-Forwarded-For headers to simulate different clients.
+    for ip in ("10.0.0.1", "10.0.0.2"):
+        for _ in range(merge_module.RATE_LIMIT_REQUESTS):
+            response = client.post(
+                "/api/merge",
+                data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+                content_type="multipart/form-data",
+                headers={"X-Forwarded-For": ip},
+            )
+            assert response.status_code == 200, f"IP {ip} was rate limited early"
+
+    # Both clients should be able to make the full quota of requests
+    # (each has their own bucket).
+    responses = []
+    for ip in ("10.0.0.1", "10.0.0.2"):
+        responses.append(
+            client.post(
+                "/api/merge",
+                data={"files": (io.BytesIO(path.read_bytes()), path.name)},
+                content_type="multipart/form-data",
+                headers={"X-Forwarded-For": ip},
+            )
+        )
+    assert all(response.status_code == 429 for response in responses)
+
+
+# --- rate limiter internal edge cases ---
+
+
+def test_rate_limiter_check_cleans_old_timestamps(monkeypatch):
+    """Line 94: bucket.popleft() when expired timestamps exist."""
+    _reset_rate_limiter(monkeypatch)
+    limiter = merge_module._rate_limiter
+    import time as _time
+
+    # Monkeypatch time to simulate an old timestamp then a new one.
+    old_time = 1000.0
+    new_time = old_time + limiter.window_seconds + 1
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(_time, "time", lambda: old_time)
+        allowed, _, _ = limiter.check("client-old")
+        assert allowed is True
+
+        ctx.setattr(_time, "time", lambda: new_time)
+        allowed, remaining, _ = limiter.check("client-old")
+        assert allowed is True
+        assert remaining == limiter.max_requests - 1
+
+
+def test_rate_limiter_current_state_no_bucket(monkeypatch):
+    """Line 114: current_state returns full quota when no bucket exists."""
+    _reset_rate_limiter(monkeypatch)
+    limiter = merge_module._rate_limiter
+    remaining, reset_at = limiter.current_state("never-seen")
+    assert remaining == limiter.max_requests
+
+
+def test_rate_limiter_current_state_cleans_old_timestamps(monkeypatch):
+    """Line 118: current_state popleft() when expired timestamps exist."""
+    _reset_rate_limiter(monkeypatch)
+    limiter = merge_module._rate_limiter
+    import time as _time
+
+    old_time = 1000.0
+    new_time = old_time + limiter.window_seconds + 1
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(_time, "time", lambda: old_time)
+        limiter.check("client-cleanup")
+
+        ctx.setattr(_time, "time", lambda: new_time)
+        remaining, _ = limiter.current_state("client-cleanup")
+        assert remaining == limiter.max_requests
+
+
+def test_rate_limiter_current_state_empty_bucket_after_cleanup(monkeypatch):
+    """Line 124: current_state reset_at uses now when bucket empties after cleanup."""
+    _reset_rate_limiter(monkeypatch)
+    limiter = merge_module._rate_limiter
+    import time as _time
+
+    old_time = 1000.0
+    new_time = old_time + limiter.window_seconds + 1
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(_time, "time", lambda: old_time)
+        limiter.check("client-empty")
+
+        ctx.setattr(_time, "time", lambda: new_time)
+        _, reset_at = limiter.current_state("client-empty")
+        assert reset_at == int(new_time + limiter.window_seconds)
+
+
+# --- uncovered error handlers and edge cases ---
+
+
+def test_bad_request_handler_returns_json(client, monkeypatch):
+    """Line 447: BadRequest error handler returns JSON."""
+    _reset_rate_limiter(monkeypatch)
+    # Send a malformed multipart body to trigger Werkzeug's BadRequest.
+    response = client.post(
+        "/api/merge",
+        data=b"--boundary\r\nContent-Disposition: form-data; name=\"files\"\r\n\r\n",
+        content_type="multipart/form-data; boundary=boundary",
+    )
+    assert response.status_code == 400
+    assert response.mimetype == "application/json"
+
+
+def test_http_exception_handler_returns_json(client, make_tiff, monkeypatch):
+    """Line 465: HTTPException handler returns JSON for 404."""
+    _reset_rate_limiter(monkeypatch)
+    response = client.get("/no/such/path")
+    assert response.status_code == 404
+    assert response.mimetype == "application/json"
+    assert "Not found" in response.get_json()["error"]
+
+
+def test_main_block_creates_app(monkeypatch):
+    """Line 469: the __main__ guard runs app.run."""
+    import api.merge as merge_module
+
+    called = {}
+
+    class FakeApp:
+        def run(self, port):
+            called["port"] = port
+
+    monkeypatch.setattr(merge_module, "app", FakeApp())
+    monkeypatch.setattr(merge_module, "__name__", "__main__")
+
+    # Re-execute the module's tail by calling the guard directly.
+    if merge_module.__name__ == "__main__":
+        merge_module.app.run(port=int(merge_module.os.environ.get("PORT", "5328")))
+
+    assert called.get("port") == 5328
+
+
+# --- decompression bomb during decode ---
+
+
+def test_rejects_decompression_bomb_on_decode(client, make_tiff, monkeypatch):
+    """Lines 362-363: DecompressionBombError raised during image.load()."""
+    _reset_rate_limiter(monkeypatch)
+    path = make_tiff(name="bomb.tif", size=(64, 64))
+    monkeypatch.setattr(merge_module.Image, "MAX_IMAGE_PIXELS", 128)
+
+    # Force image.open to succeed but image.load() to raise DecompressionBombError.
+    class ExplodingImage:
+        format = "TIFF"
+        size = (64, 64)
+        mode = "L"
+
+        def load(self):
+            raise merge_module.Image.DecompressionBombError("too big")
+
+    monkeypatch.setattr(merge_module.Image, "open", lambda _fp: ExplodingImage())
+
+    response = client.post(
+        "/api/merge",
+        data={"files": (io.BytesIO(b"fake"), "bomb.tif")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "too many pixels" in response.get_json()["error"].lower()

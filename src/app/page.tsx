@@ -1,8 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
+import type { ChangeEvent, DragEvent } from 'react';
 
-import { buildOutputName } from '../lib/downloadName.mjs';
+import { buildOutputName } from '../lib/downloadName';
 
 const MAX_FILE_COUNT = 20;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
@@ -11,37 +12,37 @@ const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 // instead of spinning forever on a stalled connection.
 const MERGE_TIMEOUT_MS = 90_000;
 
-function fileKey(file) {
+function fileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
-function totalBytes(fileList) {
+function totalBytes(fileList: File[]): number {
   return fileList.reduce((sum, file) => sum + file.size, 0);
 }
 
 export default function Home() {
-  const [files, setFiles] = useState([]);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isMerging, setIsMerging] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const fileInputRef = useRef(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isMerging, setIsMerging] = useState<boolean>(false);
+  const [error, setError] = useState<string>('');
+  const [notice, setNotice] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const openPicker = () => {
     fileInputRef.current?.click();
   };
 
-  const handleDragOver = (e) => {
+  const handleDragOver = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(true);
   };
 
-  const handleDragLeave = (e) => {
+  const handleDragLeave = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(false);
   };
 
-  const handleDrop = (e) => {
+  const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setIsDragging(false);
 
@@ -50,48 +51,45 @@ export default function Home() {
     }
   };
 
-  const handleFileSelect = (e) => {
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       addFiles(Array.from(e.target.files));
     }
     e.target.value = '';
   };
 
-  const addFiles = (newFiles) => {
-    const tiffFiles = newFiles.filter((file) =>
-      /\.tiff?$/i.test(file.name)
-    );
+  const addFiles = (newFiles: File[]) => {
+    const tiffFiles = newFiles.filter((file) => /\.tiff?$/i.test(file.name));
 
     if (tiffFiles.length === 0) {
       setError('Only .tif and .tiff files can be merged.');
-      return;
-    }
-
-    const existing = new Set(files.map(fileKey));
-    const unique = tiffFiles.filter((file) => !existing.has(fileKey(file)));
-    // The server rejects more than MAX_FILE_COUNT files; keep what fits and
-    // say so up front rather than failing after the upload has round-tripped.
-    const accepted = unique.slice(0, Math.max(MAX_FILE_COUNT - files.length, 0));
-
-    if (accepted.length < unique.length) {
-      setError(
-        `This service merges at most ${MAX_FILE_COUNT} files at once; the rest were not added.`
-      );
     } else {
-      setError('');
-    }
-    setNotice('');
+      const existing = new Set(files.map(fileKey));
+      const unique = tiffFiles.filter((file) => !existing.has(fileKey(file)));
+      // The server rejects more than MAX_FILE_COUNT files; keep what fits and
+      // say so up front rather than failing after the upload has round-tripped.
+      const accepted = unique.slice(0, Math.max(MAX_FILE_COUNT - files.length, 0));
 
-    setFiles([...files, ...accepted]);
+      if (accepted.length < unique.length) {
+        setError(
+          `This service merges at most ${MAX_FILE_COUNT} files at once; the rest were not added.`
+        );
+      } else {
+        setError('');
+      }
+      setNotice('');
+
+      setFiles([...files, ...accepted]);
+    }
   };
 
-  const removeFile = (indexToRemove) => {
+  const removeFile = (indexToRemove: number) => {
     setFiles((prev) => prev.filter((_, index) => index !== indexToRemove));
     setError('');
     setNotice('');
   };
 
-  const readErrorMessage = async (response) => {
+  const readErrorMessage = async (response: Response): Promise<string> => {
     const body = await response.text();
     try {
       const parsed = JSON.parse(body);
@@ -154,15 +152,9 @@ export default function Home() {
       setNotice(`Merged ${files.length} file${files.length === 1 ? '' : 's'}.`);
     } catch (mergeError) {
       if (mergeError instanceof DOMException && mergeError.name === 'TimeoutError') {
-        setError(
-          'The merge took too long and was stopped. Try fewer or smaller files.'
-        );
+        setError('The merge took too long and was stopped. Try fewer or smaller files.');
       } else {
-        setError(
-          mergeError instanceof Error
-            ? mergeError.message
-            : 'Failed to merge files.'
-        );
+        setError(mergeError instanceof Error ? mergeError.message : 'Failed to merge files.');
       }
     } finally {
       setIsMerging(false);

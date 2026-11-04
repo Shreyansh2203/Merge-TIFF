@@ -4,7 +4,7 @@ export const MAX_OUTPUT_STEM_LENGTH = 120;
 const UNSAFE_FILENAME_CHARS = /[\u0000-\u001f\u007f/\\:*?"<>|]/g;
 const OUTPUT_SUFFIX = '_merged.tif';
 
-export function buildOutputName(names) {
+export function buildOutputName(names: string[]): string {
   const stems = names
     .map((name) =>
       name
@@ -21,10 +21,12 @@ export function buildOutputName(names) {
     return 'merged_document.tif';
   }
 
-  const summary =
-    stems.length <= 4
-      ? stems.join('_')
-      : `${stems.slice(0, 3).join('_')}_and_${stems.length - 3}_more`;
+  let summary: string;
+  if (stems.length <= 4) {
+    summary = stems.join('_');
+  } else {
+    summary = `${stems.slice(0, 3).join('_')}_and_${stems.length - 3}_more`;
+  }
 
   return `${summary.slice(0, MAX_OUTPUT_STEM_LENGTH)}${OUTPUT_SUFFIX}`;
 }
