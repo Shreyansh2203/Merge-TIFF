@@ -211,6 +211,21 @@ describe('TIFF Merger page', () => {
     });
   });
 
+  it('surfaces a timeout DOMException as timeout message', async () => {
+    const domError = new DOMException('took too long', 'TimeoutError');
+    fetchMock(async () => {
+      throw domError;
+    });
+    render(React.createElement(Home));
+
+    dropFiles(screen.getByRole('button', { name: /add tiff files/i }), [tiff('a.tif')]);
+    fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
+
+    await waitFor(() => {
+      assert.ok(screen.getByRole('alert').textContent?.includes('took too long'));
+    });
+  });
+
   it('surfaces a non-timeout DOMException as generic failure', async () => {
     const domError = new DOMException('Something went wrong', 'AbortError');
     fetchMock(async () => {
@@ -273,5 +288,41 @@ describe('TIFF Merger page', () => {
     // No files added, no error surfaced
     assert.ok(screen.queryByText(/file selected/i) === null);
     assert.ok(screen.queryByRole('alert') === null);
+  });
+
+  it('accepts .tiff extension (isTiffFile endsWith .tiff true path)', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    dropFiles(dropzone, [tiff('scan.tiff', 200)]);
+    assert.ok(screen.getByText('1 file selected'));
+  });
+
+  it('rejects non-TIFF files (isTiffFile both endsWith false path)', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const png = new File(['x'], 'photo.png', { type: 'image/png' });
+    dropFiles(dropzone, [png]);
+    // Non-TIFF files are filtered out; error is surfaced
+    assert.ok(screen.getByRole('alert').textContent?.includes('Only .tif and .tiff'));
+  });
+
+  it('errors when dropping more than MAX_FILE_COUNT files', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const tooMany = Array.from({ length: 21 }, (_unused, i) => tiff(`file${i}.tif`, 100 + i));
+    dropFiles(dropzone, tooMany);
+    // MAX_FILE_COUNT is 20; the rest are rejected
+    assert.ok(screen.getByRole('alert').textContent?.includes('at most 20 files at once'));
+  });
+
+  it('errors when total bytes exceed MAX_REQUEST_BYTES', () => {
+    render(React.createElement(Home));
+    const dropzone = screen.getByRole('button', { name: /add tiff files/i });
+    const bigFile = new File([new Uint8Array(5 * 1024 * 1024)], 'big.tif', { type: 'image/tiff' });
+    dropFiles(dropzone, [bigFile]);
+    const merge = screen.getByRole('button', { name: /merge tiffs/i }) as HTMLButtonElement;
+    fireEvent.click(merge);
+    // 5 MB > 4 MB MAX_REQUEST_BYTES
+    assert.ok(screen.getByRole('alert').textContent?.includes('4 MB'));
   });
 });

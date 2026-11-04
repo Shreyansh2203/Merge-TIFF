@@ -22,10 +22,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
 const openPicker = () => {
-  const input = fileInputRef.current;
-  if (input != null) {
-    input.click();
-  }
+  fileInputRef.current!.click();
 };
 
   const handleDragOver = (e: DragEvent<HTMLButtonElement>) => {
@@ -42,13 +39,13 @@ const openPicker = () => {
     e.preventDefault();
     setIsDragging(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer.files.length > 0) {
       addFiles(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
+    if (e.target.files.length > 0) {
       addFiles(Array.from(e.target.files));
     }
   };
