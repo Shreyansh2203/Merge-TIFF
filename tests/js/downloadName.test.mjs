@@ -140,9 +140,7 @@ describe('buildOutputName', () => {
   });
 
   it('joins with _and_N_more when more than 4 stems', () => {
-    const name = buildOutputName([
-      'one.tif', 'two.tif', 'three.tif', 'four.tif', 'five.tif',
-    ]);
+    const name = buildOutputName(['one.tif', 'two.tif', 'three.tif', 'four.tif', 'five.tif']);
     assert.equal(name, 'one_two_three_and_2_more_merged.tif');
   });
 
