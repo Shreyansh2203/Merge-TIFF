@@ -211,9 +211,10 @@ describe('TIFF Merger page', () => {
     });
   });
 
-  it('surfaces a generic failure message', async () => {
+  it('surfaces a non-timeout DOMException as generic failure', async () => {
+    const domError = new DOMException('Something went wrong', 'AbortError');
     fetchMock(async () => {
-      throw new Error('connection reset');
+      throw domError;
     });
     render(React.createElement(Home));
 
@@ -221,7 +222,7 @@ describe('TIFF Merger page', () => {
     fireEvent.click(screen.getByRole('button', { name: /merge tiffs/i }));
 
     await waitFor(() => {
-      assert.ok(screen.getByRole('alert').textContent?.includes('connection reset'));
+      assert.ok(screen.getByRole('alert').textContent?.includes('Something went wrong'));
     });
   });
 
@@ -259,6 +260,18 @@ describe('TIFF Merger page', () => {
     render(React.createElement(Home));
     const dropzone = screen.getByRole('button', { name: /add tiff files/i });
     fireEvent.drop(dropzone, { dataTransfer: { files: [] } });
+    assert.ok(screen.queryByRole('alert') === null);
+  });
+
+  it('ignores a file input change with no files', () => {
+    render(React.createElement(Home));
+    const input = document.querySelector('.file-input') as HTMLInputElement;
+    assert.ok(input);
+
+    fireEvent.change(input, { target: { files: [] } });
+
+    // No files added, no error surfaced
+    assert.ok(screen.queryByText(/file selected/i) === null);
     assert.ok(screen.queryByRole('alert') === null);
   });
 });
