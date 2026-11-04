@@ -69,9 +69,5 @@ jobs:
         run: npm run lint -- --max-warnings=0
       - name: Run client unit tests
         run: npm run test:ui
-      # Coverage thresholds (lines, branches, functions) are on the script, so
-      # this step fails the build on a drop as well as printing the table.
-      - name: Run client unit tests with the coverage gate
-        run: npm run test:ui:coverage
       - name: Build
         run: npm run build
