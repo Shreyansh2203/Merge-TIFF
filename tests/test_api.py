@@ -1,5 +1,6 @@
 import io
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -888,7 +889,10 @@ def _reset_rate_limiter(monkeypatch):
     monkeypatch.setattr(
         merge_module,
         "_rate_limiter",
-        merge_module.RateLimiter(merge_module.RATE_LIMIT_REQUESTS, merge_module.RATE_LIMIT_WINDOW_SECONDS),
+        merge_module.RateLimiter(
+            merge_module.RATE_LIMIT_REQUESTS,
+            merge_module.RATE_LIMIT_WINDOW_SECONDS,
+        ),
     )
 
 
@@ -945,7 +949,9 @@ def test_rate_limit_headers_are_present(client, make_tiff, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.headers["X-RateLimit-Limit"] == str(merge_module.RATE_LIMIT_REQUESTS)
+    assert response.headers["X-RateLimit-Limit"] == str(
+        merge_module.RATE_LIMIT_REQUESTS
+    )
     assert response.headers["X-RateLimit-Remaining"].isdigit()
     assert response.headers["X-RateLimit-Reset"].isdigit()
 
@@ -953,7 +959,10 @@ def test_rate_limit_headers_are_present(client, make_tiff, monkeypatch):
 def test_health_endpoint_is_not_rate_limited(client, monkeypatch):
     _reset_rate_limiter(monkeypatch)
 
-    responses = [client.get("/health") for _ in range(merge_module.RATE_LIMIT_REQUESTS + 5)]
+    responses = [
+        client.get("/health")
+        for _ in range(merge_module.RATE_LIMIT_REQUESTS + 5)
+    ]
     assert all(response.status_code == 200 for response in responses)
 
 
@@ -994,18 +1003,17 @@ def test_rate_limiter_check_cleans_old_timestamps(monkeypatch):
     """Line 94: bucket.popleft() when expired timestamps exist."""
     _reset_rate_limiter(monkeypatch)
     limiter = merge_module._rate_limiter
-    import time as _time
+    # time imported at top of file
 
-    # Monkeypatch time to simulate an old timestamp then a new one.
     old_time = 1000.0
     new_time = old_time + limiter.window_seconds + 1
 
     with monkeypatch.context() as ctx:
-        ctx.setattr(_time, "time", lambda: old_time)
+        ctx.setattr(time, "time", lambda: old_time)
         allowed, _, _ = limiter.check("client-old")
         assert allowed is True
 
-        ctx.setattr(_time, "time", lambda: new_time)
+        ctx.setattr(time, "time", lambda: new_time)
         allowed, remaining, _ = limiter.check("client-old")
         assert allowed is True
         assert remaining == limiter.max_requests - 1
@@ -1023,16 +1031,15 @@ def test_rate_limiter_current_state_cleans_old_timestamps(monkeypatch):
     """Line 118: current_state popleft() when expired timestamps exist."""
     _reset_rate_limiter(monkeypatch)
     limiter = merge_module._rate_limiter
-    import time as _time
 
     old_time = 1000.0
     new_time = old_time + limiter.window_seconds + 1
 
     with monkeypatch.context() as ctx:
-        ctx.setattr(_time, "time", lambda: old_time)
+        ctx.setattr(time, "time", lambda: old_time)
         limiter.check("client-cleanup")
 
-        ctx.setattr(_time, "time", lambda: new_time)
+        ctx.setattr(time, "time", lambda: new_time)
         remaining, _ = limiter.current_state("client-cleanup")
         assert remaining == limiter.max_requests
 
@@ -1041,16 +1048,16 @@ def test_rate_limiter_current_state_empty_bucket_after_cleanup(monkeypatch):
     """Line 124: current_state reset_at uses now when bucket empties after cleanup."""
     _reset_rate_limiter(monkeypatch)
     limiter = merge_module._rate_limiter
-    import time as _time
+    # time imported at top of file
 
     old_time = 1000.0
     new_time = old_time + limiter.window_seconds + 1
 
     with monkeypatch.context() as ctx:
-        ctx.setattr(_time, "time", lambda: old_time)
+        ctx.setattr(time, "time", lambda: old_time)
         limiter.check("client-empty")
 
-        ctx.setattr(_time, "time", lambda: new_time)
+        ctx.setattr(time, "time", lambda: new_time)
         _, reset_at = limiter.current_state("client-empty")
         assert reset_at == int(new_time + limiter.window_seconds)
 
@@ -1082,8 +1089,6 @@ def test_http_exception_handler_returns_json(client, make_tiff, monkeypatch):
 
 def test_main_block_creates_app(monkeypatch):
     """Line 469: the __main__ guard runs app.run."""
-    import api.merge as merge_module
-
     called = {}
 
     class FakeApp:
@@ -1093,20 +1098,20 @@ def test_main_block_creates_app(monkeypatch):
     monkeypatch.setattr(merge_module, "app", FakeApp())
     monkeypatch.setattr(merge_module, "__name__", "__main__")
 
-    # Re-execute the module's tail by calling the guard directly.
     if merge_module.__name__ == "__main__":
         merge_module.app.run(port=int(merge_module.os.environ.get("PORT", "5328")))
 
     assert called.get("port") == 5328
 
 
-# --- decompression bomb during decode ---
+# --- uncovered error handlers and edge cases ---
+
 
 
 def test_rejects_decompression_bomb_on_decode(client, make_tiff, monkeypatch):
     """Lines 362-363: DecompressionBombError raised during image.load()."""
     _reset_rate_limiter(monkeypatch)
-    path = make_tiff(name="bomb.tif", size=(64, 64))
+    make_tiff(name="bomb.tif", size=(64, 64))
     monkeypatch.setattr(merge_module.Image, "MAX_IMAGE_PIXELS", 128)
 
     # Force image.open to succeed but image.load() to raise DecompressionBombError.
