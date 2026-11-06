@@ -34,7 +34,7 @@
 
 ## Overview
 
-**Merge-TIFF** is a production-grade TIFF image merging service with a Next.js frontend and a Python/Flask backend API. Upload multiple TIFF/TIFF files, merge them into a single output file, and download the result — all with built-in rate limiting, pixel-budget guards, and serverless-friendly request/response size caps.
+**Merge-TIFF** is a production-grade TIFF image merging service with a Next.js frontend and a Python/Flask backend API. Upload multiple TIFF/TIFF files, merge them into a single output file, and download the result — all with built-in rate limiting, pixel-budget guards, and serverless-friendly request/response size caps. Merge up to 20 pages per request.
 
 Built for deployment on Vercel (frontend) + any Python-compatible host (API), with serverless-aware limits that respect the 4.5 MB edge payload ceiling.
 
