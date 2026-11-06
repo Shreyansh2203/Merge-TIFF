@@ -1,0 +1,11 @@
+# Rule selection is spelled out so the CI gate cannot move when ruff changes a
+# default under us. Line length matches what the rest of the repository is
+# already written at. PLR2004 and PLR0911 are off on purpose: comparing a
+# literal against a named constant in a test is the point of those tests, and
+# merge_tiffs has to branch once per gate.
+line-length = 88
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "PL"]
+ignore = ["PLR2004", "PLR0911"]

@@ -1,0 +1,469 @@
+import io
+import logging
+import os
+import re
+import time
+from collections import deque
+from threading import Lock
+
+from flask import Flask, jsonify, request, send_file
+from PIL import Image, TiffImagePlugin
+from werkzeug.exceptions import (
+    BadRequest,
+    HTTPException,
+    MethodNotAllowed,
+    NotFound,
+    RequestEntityTooLarge,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("tiff_merge")
+
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
+# Vercel caps a function's request *and* response body at 4.5 MB and answers
+# anything larger with 413 FUNCTION_PAYLOAD_TOO_LARGE. The request cap above
+# sits under that ceiling so an oversized upload is rejected with a JSON
+# message; this one is the same idea for the way out, because a merge can
+# re-encode to a larger body than it received and would otherwise fail at the
+# edge with no in-app signal.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_FILES = 20
+MAX_IMAGE_PIXELS = 50_000_000
+# Pillow's own gate only raises above twice MAX_IMAGE_PIXELS and merely warns
+# above it, so it bounds one image at 100M pixels and bounds nothing at all
+# across a 20-file request. This is the budget for the decoded pixel data a
+# single request may materialise, and it is checked from the TIFF header before
+# any page is decoded. At four bytes per pixel it caps the decoded pages of one
+# invocation at roughly 200 MB.
+MAX_TOTAL_IMAGE_PIXELS = 50_000_000
+# Rate limit: N requests per rolling window per client IP. A serverless function
+# instance keeps its own bucket, so behind a load balancer the effective limit
+# is N per instance. For a deployment with more than one instance, put Redis or
+# an edge rate limiter (Vercel WAF, Cloudflare, etc.) in front of /api/merge.
+RATE_LIMIT_REQUESTS = 30
+RATE_LIMIT_WINDOW_SECONDS = 60
+TIFF_SUFFIXES = (".tif", ".tiff")
+# Stripped from an uploaded filename before it is written into the output
+# TIFF's tags. os.path.basename does nothing about control bytes in a crafted
+# multipart filename, and tags 270/285 are delivered verbatim inside the file
+# handed back to the browser. Mirrors the class the client strips in
+# src/lib/downloadName.mjs.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
+OUTPUT_FILENAME = "merged_output.tif"
+OUTPUT_MIME = "image/tiff"
+OUTPUT_COMPRESSION = "tiff_adobe_deflate"
+MUTUALLY_EXCLUSIVE_MODE_GROUPS = ({"1"}, {"P", "PA"})
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+
+class RateLimiter:
+    """Fixed-window rate limiter keyed by client IP.
+
+    One bucket per IP per window. The window resets on first use and again after
+    ``RATE_LIMIT_WINDOW_SECONDS`` seconds, so a sustained client is limited to
+    ``RATE_LIMIT_REQUESTS`` per window. Not shared across serverless instances;
+    for multi-instance deployments, back this with Redis or an edge limiter.
+    """
+
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._buckets: dict[str, deque[float]] = {}
+        self._lock = Lock()
+
+    def check(self, key: str) -> tuple[bool, int, int]:
+        """Return (allowed, remaining, reset_at_epoch_seconds).
+
+        Increments the bucket when allowed; callers should use
+        :meth:`current_state` for read-only inspection.
+        """
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        with self._lock:
+            bucket = self._buckets.setdefault(key, deque())
+            # Drop timestamps older than the current window.
+            while bucket and bucket[0] <= window_start:
+                bucket.popleft()
+
+            remaining = self.max_requests - len(bucket)
+            if remaining <= 0:
+                reset_at = int(bucket[0] + self.window_seconds)
+                return False, 0, reset_at
+
+            bucket.append(now)
+            remaining = self.max_requests - len(bucket)
+            reset_at = int(now + self.window_seconds)
+            return True, remaining, reset_at
+
+    def current_state(self, key: str) -> tuple[int, int]:
+        """Return (remaining, reset_at_epoch_seconds) without incrementing."""
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if not bucket:
+                return self.max_requests, int(now + self.window_seconds)
+
+            # Drop timestamps older than the current window.
+            while bucket and bucket[0] <= window_start:
+                bucket.popleft()
+
+            remaining = self.max_requests - len(bucket)
+            if bucket:
+                reset_at = int(bucket[0] + self.window_seconds)
+            else:
+                reset_at = int(now + self.window_seconds)
+            return max(remaining, 0), reset_at
+
+
+_rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
+
+
+def _client_key() -> str:
+    """Best-effort client identifier for rate limiting.
+
+    X-Forwarded-For is used when present (the edge appends the client's address),
+    falling back to the socket peer. A forged leading X-Forwarded-For entry is
+    ignored because only the last entry -- the one the edge added -- is trusted.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.remote_addr or "unknown"
+
+
+@app.before_request
+def enforce_rate_limit():
+    # Only the merge endpoint is rate limited. Health checks are intentionally
+    # unthrottled so orchestrators can never be locked out, and method-not-allowed
+    # responses must not be masked by a rate-limit rejection.
+    if request.path != "/api/merge" or request.method != "POST":
+        return None
+
+    allowed, remaining, reset_at = _rate_limiter.check(_client_key())
+    if not allowed:
+        retry_after = max(reset_at - int(time.time()), 1)
+        return (
+            jsonify(
+                error=(
+                    "Rate limit exceeded. "
+                    f"Maximum {RATE_LIMIT_REQUESTS} requests per "
+                    f"{RATE_LIMIT_WINDOW_SECONDS} seconds per client. "
+                    f"Retry after {retry_after} seconds."
+                )
+            ),
+            429,
+            {
+                "X-RateLimit-Limit": str(RATE_LIMIT_REQUESTS),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": str(retry_after),
+            },
+        )
+
+    return None
+
+
+@app.after_request
+def set_security_headers(response):
+    # Every response this service produces is either JSON or the merged TIFF;
+    # nosniff stops a browser reinterpreting either of them as active content.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Rate-limit visibility so clients can back off before hitting 429.
+    if request.path != "/health":
+        remaining, reset_at = _rate_limiter.current_state(_client_key())
+        response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_REQUESTS)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(reset_at)
+    return response
+
+
+class MergeError(Exception):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+class OutputCeilingReached(Exception):
+    """Internal signal that the writer crossed MAX_RESPONSE_BYTES."""
+
+
+class CappedBuffer(io.BytesIO):
+    """A BytesIO that stops the merge the moment it would pass the cap.
+
+    The response ceiling used to be checked against getvalue() *after* the whole
+    file had been assembled, so a merge bound for 400 MB held all of it before
+    anything noticed. The same number is applied here while the bytes are being
+    produced, which leaves a peak of one write over the cap instead of whatever
+    the pixel budget allowed.
+    """
+
+    def __init__(self, cap):
+        super().__init__()
+        self.cap = cap
+        self.peak = 0
+
+    def write(self, data):
+        end = self.tell() + len(data)
+        if end > self.cap:
+            raise OutputCeilingReached
+        written = super().write(data)
+        self.peak = max(self.peak, end)
+        return written
+
+
+def _strip_source_tags(image):
+    """Reduce a decoded page to its pixels, so the merge owns the tag directory.
+
+    Pillow hands the whole source directory to libtiff: TiffImagePlugin._save
+    builds `supplied_tags` out of im.tag and im.tag_v2 and chains it into the
+    attributes it sets on the encoder. Left alone, every page of the output
+    carries the upload's own XMP (700), Software (305), resolution, ICC profile
+    and custom tags through verbatim -- attacker-supplied bytes handed straight
+    back to the browser. _save also falls back to im.info for `icc_profile`, so
+    the embedded colour profile has to go as well. The tags the merge does mean
+    to write are passed per page as `tiffinfo` and are unaffected.
+    """
+    image.tag_v2 = TiffImagePlugin.ImageFileDirectory_v2()
+    image.__dict__.pop("tag", None)
+    image.info = {}
+
+
+def _format_size(num_bytes):
+    if num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    return f"{num_bytes / 1024:.0f} KB"
+
+
+def _mode_conflict(pages):
+    present = {image.mode for _, image in pages}
+    matched = [group & present for group in MUTUALLY_EXCLUSIVE_MODE_GROUPS]
+    present_groups = [sorted(group) for group in matched if group]
+    if len(present_groups) > 1:
+        return [mode for group in present_groups for mode in group]
+    return None
+
+
+def _safe_page_name(name):
+    """Reduce an uploaded filename to what the output TIFF may carry per page.
+
+    The name lands in the ImageDescription (270) and PageName (285) tags of the
+    delivered file, so control characters have to go here -- at the write
+    point -- rather than only in the client, which the request never has to
+    pass through. A name that is nothing but unsafe characters becomes "page".
+    """
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("", os.path.basename(name)).strip()
+    return cleaned or "page"
+
+
+def merge_images(pages):
+    if not pages:
+        raise MergeError("No valid TIFF images to merge.")
+
+    conflict = _mode_conflict(pages)
+    if conflict:
+        raise MergeError(
+            "Bilevel (mode 1) and palette (mode P) pages cannot be written "
+            "into the same multi-page TIFF. Re-save them in a shared mode, "
+            f"for example RGB. Conflicting modes: {', '.join(conflict)}."
+        )
+
+    buffer = CappedBuffer(MAX_RESPONSE_BYTES)
+    try:
+        with TiffImagePlugin.AppendingTiffWriter(buffer) as writer:
+            for name, image in pages:
+                tiffinfo = TiffImagePlugin.ImageFileDirectory_v2()
+                safe_name = _safe_page_name(name)
+                tiffinfo[270] = safe_name
+                tiffinfo[285] = safe_name
+                _strip_source_tags(image)
+                image.save(
+                    writer,
+                    format="TIFF",
+                    compression=OUTPUT_COMPRESSION,
+                    tiffinfo=tiffinfo,
+                )
+                writer.newFrame()
+    except OutputCeilingReached as exc:
+        raise MergeError(
+            "Merging these files would produce more than the "
+            f"{_format_size(MAX_RESPONSE_BYTES)} this service can return in "
+            "one response. Merge fewer pages per request, or split the batch "
+            "into several smaller merges. Pages are already written as lossless "
+            "Deflate, so re-compressing the source files will not bring the "
+            "result under the limit.",
+            status=413,
+        ) from exc
+    except (OSError, ValueError, SyntaxError, KeyError) as exc:
+        logger.exception("Failed to encode merged TIFF")
+        raise MergeError(
+            "These images could not be encoded into a single multi-page TIFF. "
+            "Try re-saving them in a common colour mode and compression."
+        ) from exc
+
+    return buffer.getvalue()
+
+
+def _decode_upload(storage, remaining_pixels):
+    name = storage.filename
+    suffix = os.path.splitext(name)[1].lower()
+    if suffix not in TIFF_SUFFIXES:
+        raise MergeError(
+            f"{name!r} is not a TIFF file. Only .tif and .tiff are accepted."
+        )
+
+    try:
+        image = Image.open(io.BytesIO(storage.read()))
+    except Image.DecompressionBombError as exc:
+        logger.warning("Rejected oversized image %r: %s", name, exc)
+        raise MergeError(
+            f"{name!r} expands to too many pixels to process safely."
+        ) from exc
+    except Exception as exc:
+        logger.warning("Rejected unreadable upload %r: %r", name, exc)
+        raise MergeError(f"{name!r} could not be read as a TIFF image.") from exc
+
+    if image.format != "TIFF":
+        raise MergeError(f"{name!r} is not a TIFF image.")
+
+    width, height = image.size
+    pixels = width * height
+    if pixels > MAX_IMAGE_PIXELS:
+        logger.warning("Rejected oversized image %r: %d pixels", name, pixels)
+        raise MergeError(
+            f"{name!r} expands to {pixels} pixels, over the "
+            f"{MAX_IMAGE_PIXELS} this service will decode in one image."
+        )
+    if pixels > remaining_pixels:
+        logger.warning(
+            "Rejected request over the pixel budget at %r: %d pixels left",
+            name,
+            remaining_pixels,
+        )
+        raise MergeError(
+            f"{name!r} would take this request past the "
+            f"{MAX_TOTAL_IMAGE_PIXELS} pixel budget for a single merge. "
+            "Upload fewer pages, or split them into several merges."
+        )
+
+    try:
+        image.load()
+    except Image.DecompressionBombError as exc:
+        logger.warning("Rejected oversized image %r on decode: %s", name, exc)
+        raise MergeError(
+            f"{name!r} expands to too many pixels to process safely."
+        ) from exc
+    except Exception as exc:
+        logger.warning("Rejected undecodable upload %r: %r", name, exc)
+        raise MergeError(f"{name!r} contains corrupt TIFF data.") from exc
+
+    return os.path.basename(name), image, pixels
+
+
+@app.get("/health")
+def health():
+    return jsonify(
+        status="ok",
+        max_request_bytes=MAX_REQUEST_BYTES,
+        max_response_bytes=MAX_RESPONSE_BYTES,
+        max_files=MAX_FILES,
+        max_image_pixels=MAX_IMAGE_PIXELS,
+        max_total_image_pixels=MAX_TOTAL_IMAGE_PIXELS,
+    )
+
+
+@app.post("/api/merge")
+def merge_tiffs():
+    if "files" not in request.files:
+        return jsonify(error="No files provided."), 400
+
+    parts = request.files.getlist("files")
+    if not parts:
+        return jsonify(error="No files selected."), 400
+
+    # Counted before anything is filtered, because Werkzeug has already parsed
+    # and buffered every part by now: the cap has to describe the work the
+    # request actually caused, not the subset that survived a filter.
+    if len(parts) > MAX_FILES:
+        return jsonify(
+            error=f"Too many files: {len(parts)} uploaded, maximum is {MAX_FILES}."
+        ), 400
+
+    unnamed = sum(1 for part in parts if not part.filename)
+    if unnamed:
+        return jsonify(
+            error=(
+                f"{unnamed} of {len(parts)} uploaded "
+                f"{'part has' if unnamed == 1 else 'parts have'} no filename. "
+                "The merge was refused rather than returning fewer pages than "
+                "were posted, so re-select the files and try again."
+            )
+        ), 400
+
+    pages = []
+    remaining_pixels = MAX_TOTAL_IMAGE_PIXELS
+    try:
+        for part in parts:
+            name, image, pixels = _decode_upload(part, remaining_pixels)
+            remaining_pixels -= pixels
+            pages.append((name, image))
+        merged = merge_images(pages)
+    except MergeError as exc:
+        return jsonify(error=exc.message), exc.status
+    except Exception:
+        logger.exception("Unhandled error while merging uploads")
+        return jsonify(error="Failed to merge images."), 500
+
+    return send_file(
+        io.BytesIO(merged),
+        mimetype=OUTPUT_MIME,
+        as_attachment=True,
+        download_name=OUTPUT_FILENAME,
+    )
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_too_large(_exc):
+    return jsonify(
+        error=(
+            "Upload is too large. The maximum request size is "
+            f"{_format_size(MAX_REQUEST_BYTES)}."
+        )
+    ), 413
+
+
+@app.errorhandler(BadRequest)
+def handle_bad_request(_exc):
+    return jsonify(
+        error="The request body could not be read as a multipart upload."
+    ), 400
+
+
+@app.errorhandler(NotFound)
+def handle_not_found(_exc):
+    return jsonify(error="Not found. This function serves /api/merge and /health."), 404
+
+
+@app.errorhandler(MethodNotAllowed)
+def handle_method_not_allowed(_exc):
+    return jsonify(error="Use POST for /api/merge and GET for /health."), 405
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(exc):
+    """Every error leaves as JSON, so the documented contract always holds."""
+    return jsonify(error=f"{exc.name}."), exc.code
+
+
+if __name__ == "__main__":
+    app.run(port=int(os.environ.get("PORT", "5328")))

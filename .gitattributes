@@ -1,0 +1,7 @@
+# Without this, a Windows clone checks text out as CRLF while the index holds
+# LF, so `api/merge.py` shows up as i/lf w/crlf and every edit is a whole-file
+# diff. text=auto leaves anything Git detects as binary alone; the explicit
+# entries below make that independent of the heuristic.
+* text=auto eol=lf
+
+src/app/favicon.ico binary

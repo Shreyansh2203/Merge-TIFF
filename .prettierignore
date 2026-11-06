@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+test-results/
+*.log
+.env.local
+.env.*.local
+.npmrc
+.yarn-integrity
+.coverage/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
